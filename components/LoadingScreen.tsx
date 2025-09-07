@@ -6,32 +6,30 @@ import {
   useColorScheme,
   View,
 } from "react-native";
+import { Colors } from "../constants/Colors"; // 1. Import your Colors object
 
 export default function LoadingScreen() {
-  // 2. Get the current color scheme ('dark', 'light', or null)
-  const colorScheme = useColorScheme();
+  // 2. Get the current color scheme ('dark' or 'light')
+  const colorScheme = useColorScheme() ?? "light"; // Use 'light' as a fallback
 
-  // 3. Define colors based on the theme
-  const containerStyle = {
-    backgroundColor: colorScheme === "dark" ? "#121212" : "#FFFFFF",
-  };
-
-  const spinnerColor = colorScheme === "dark" ? "#FFFFFF" : "#007AFF";
+  // 3. Select the entire color palette for the current theme
+  const themeColors = Colors[colorScheme];
 
   return (
-    // 4. Apply the dynamic style to the container
-    <View style={[styles.container, containerStyle]}>
+    // 4. Apply the background color from your theme
+    <View
+      style={[styles.container, { backgroundColor: themeColors.background }]}
+    >
       <Image
-        source={require("../assets/images/react-logo.png")} // Make sure this logo is visible on both dark and light backgrounds
+        source={require("../assets/images/react-logo.png")}
         style={styles.logo}
       />
-      {/* 5. Apply the dynamic color to the spinner */}
-      <ActivityIndicator size="large" color={spinnerColor} />
+      {/* 5. Apply the tint color (for spinners/accents) from your theme */}
+      <ActivityIndicator size="large" color={themeColors.tint} />
     </View>
   );
 }
 
-// The static styles that don't change
 const styles = StyleSheet.create({
   container: {
     flex: 1,
