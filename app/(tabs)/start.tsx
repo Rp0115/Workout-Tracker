@@ -16,7 +16,6 @@ import {
   useColorScheme,
 } from "react-native";
 
-// --- REPLACE THESE IMPORTS ---
 import { useAuth } from "../../context/AuthContext";
 import { db } from "../../firebaseConfig";
 
