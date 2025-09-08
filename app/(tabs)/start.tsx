@@ -1,7 +1,17 @@
 import { Feather } from "@expo/vector-icons";
 import { useIsFocused } from "@react-navigation/native";
 import * as Haptics from "expo-haptics";
-import { collection, getDocs } from "firebase/firestore";
+import {
+  Timestamp,
+  addDoc,
+  collection,
+  getDocs,
+  limit,
+  orderBy,
+  query,
+  serverTimestamp,
+  writeBatch,
+} from "firebase/firestore";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -61,8 +71,17 @@ interface WorkoutPlan {
   description?: string;
   selectedDays: string[];
   workouts: Workout[];
+  primaryMuscleGroups?: string[];
   order: number;
   icon?: string;
+}
+
+interface WorkoutHistory {
+  id: string;
+  planId: string;
+  planName: string;
+  icon?: string;
+  completedAt: Timestamp;
 }
 
 interface SetCompletion {
@@ -143,6 +162,23 @@ const useCountdown = (initialSeconds: number, onComplete: () => void) => {
   return { time, start, pause, isActive };
 };
 
+const formatDate = (timestamp: Timestamp) => {
+  if (!timestamp) return "";
+  const date = timestamp.toDate();
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const yesterday = new Date(today);
+  yesterday.setDate(yesterday.getDate() - 1);
+
+  if (date >= today) return "Today";
+  if (date >= yesterday) return "Yesterday";
+
+  return date.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+  });
+};
+
 // =================================================================================================
 // --- UI COMPONENTS ---
 // =================================================================================================
@@ -174,6 +210,25 @@ const MusicPlayerCard = () => {
   );
 };
 
+const HistoryCard = ({
+  item,
+  onPress,
+}: {
+  item: WorkoutHistory;
+  onPress: () => void;
+}) => {
+  const styles = getStyles(useColorScheme() ?? "light");
+  return (
+    <TouchableOpacity style={styles.historyCard} onPress={onPress}>
+      <Text style={styles.historyCardIcon}>{item.icon || "💪"}</Text>
+      <Text style={styles.historyCardTitle} numberOfLines={2}>
+        {item.planName}
+      </Text>
+      <Text style={styles.historyCardDate}>{formatDate(item.completedAt)}</Text>
+    </TouchableOpacity>
+  );
+};
+
 // =================================================================================================
 // --- SCREEN VIEWS ---
 // =================================================================================================
@@ -193,9 +248,14 @@ const SelectablePlanCard = ({
         <Text style={styles.selectableCardTitle} numberOfLines={2}>
           {plan.planName}
         </Text>
-        <Text style={styles.selectableCardSubtitle} numberOfLines={3}>
+        <Text style={styles.selectableCardSubtitle} numberOfLines={2}>
           {plan.description || `${plan.workouts.length} exercises`}
         </Text>
+        {plan.primaryMuscleGroups && plan.primaryMuscleGroups.length > 0 && (
+          <Text style={styles.selectableCardMuscles} numberOfLines={2}>
+            {plan.primaryMuscleGroups.join(", ")}
+          </Text>
+        )}
       </View>
     </TouchableOpacity>
   );
@@ -204,31 +264,70 @@ const SelectablePlanCard = ({
 const StartWorkoutView = ({
   onChoosePlan,
   onQuickStart,
+  recentWorkouts,
+  onStartFromHistory,
+  onClearHistory,
 }: {
   onChoosePlan: () => void;
   onQuickStart: () => void;
+  recentWorkouts: WorkoutHistory[];
+  onStartFromHistory: (historyItem: WorkoutHistory) => void;
+  onClearHistory: () => void;
 }) => {
   const styles = getStyles(useColorScheme() ?? "light");
   const colors = Colors[useColorScheme() ?? "light"];
   return (
     <ScrollView contentContainerStyle={styles.startViewContainer}>
-      <Text style={styles.pageTitle}>Start Session</Text>
-      <Text style={styles.startViewSubtitle}>
-        Select a workout plan to begin your training.
-      </Text>
-      <TouchableOpacity style={styles.primaryButton} onPress={onChoosePlan}>
-        <Feather name="list" size={20} color="#FFFFFF" />
-        <Text style={styles.primaryButtonText}>Choose Workout Plan</Text>
-      </TouchableOpacity>
-      <TouchableOpacity
-        style={[styles.secondaryButton, { marginTop: 15 }]}
-        onPress={onQuickStart}
-      >
-        <Feather name="plus-circle" size={20} color={colors.primary} />
-        <Text style={styles.secondaryButtonText}>
-          Quick Start Empty Session
+      <View style={styles.mainContent}>
+        <Text style={styles.pageTitle}>Start Session</Text>
+        <Text style={styles.startViewSubtitle}>
+          Select a workout plan to begin your training.
         </Text>
-      </TouchableOpacity>
+        <TouchableOpacity style={styles.primaryButton} onPress={onChoosePlan}>
+          <Feather name="list" size={20} color="#FFFFFF" />
+          <Text style={styles.primaryButtonText}>Choose Workout Plan</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.secondaryButton, { marginTop: 15 }]}
+          onPress={onQuickStart}
+        >
+          <Feather name="plus-circle" size={20} color={colors.primary} />
+          <Text style={styles.secondaryButtonText}>
+            Quick Start Empty Session
+          </Text>
+        </TouchableOpacity>
+      </View>
+
+      <View style={styles.historySection}>
+        <Text style={styles.historyTitle}>Get back into it</Text>
+        {recentWorkouts.length > 0 ? (
+          <>
+            <FlatList
+              data={recentWorkouts}
+              keyExtractor={(item) => item.id}
+              numColumns={2}
+              scrollEnabled={false}
+              columnWrapperStyle={{ justifyContent: "space-between" }}
+              renderItem={({ item }) => (
+                <HistoryCard
+                  item={item}
+                  onPress={() => onStartFromHistory(item)}
+                />
+              )}
+            />
+            <TouchableOpacity
+              style={styles.clearHistoryButton}
+              onPress={onClearHistory}
+            >
+              <Text style={styles.clearHistoryButtonText}>Clear History</Text>
+            </TouchableOpacity>
+          </>
+        ) : (
+          <View style={styles.historyEmpty}>
+            <Text style={styles.historyEmptyText}>No recent workouts.</Text>
+          </View>
+        )}
+      </View>
     </ScrollView>
   );
 };
@@ -238,7 +337,7 @@ const ActiveWorkoutView = ({
   onFinish,
 }: {
   plan: WorkoutPlan;
-  onFinish: () => void;
+  onFinish: (finishedPlan: WorkoutPlan) => void;
 }) => {
   const styles = getStyles(useColorScheme() ?? "light");
   const colors = Colors[useColorScheme() ?? "light"];
@@ -293,7 +392,7 @@ const ActiveWorkoutView = ({
       "Are you sure you want to end this session?",
       [
         { text: "Cancel", style: "cancel" },
-        { text: "Finish", style: "destructive", onPress: onFinish },
+        { text: "Finish", style: "destructive", onPress: () => onFinish(plan) },
       ]
     );
   };
@@ -448,45 +547,96 @@ export default function WorkoutSessionScreen() {
 
   const [isLoading, setIsLoading] = useState(true);
   const [allPlans, setAllPlans] = useState<WorkoutPlan[]>([]);
+  const [recentWorkouts, setRecentWorkouts] = useState<WorkoutHistory[]>([]);
   const [activePlan, setActivePlan] = useState<WorkoutPlan | null>(null);
   const [isPlanSelectorVisible, setIsPlanSelectorVisible] = useState(false);
 
   const fetchWorkoutPlans = useCallback(async () => {
-    if (!user) {
-      setIsLoading(false);
-      return;
-    }
+    if (!user) return;
     const plansCollectionRef = collection(
       db,
       "users",
       user.uid,
       "workoutPlans"
     );
-
     try {
       const querySnapshot = await getDocs(plansCollectionRef);
       const plans = querySnapshot.docs
         .map((doc) => ({ id: doc.id, ...doc.data() } as WorkoutPlan))
         .sort((a, b) => a.order - b.order);
-
       setAllPlans(plans);
     } catch (error) {
       console.error("Error fetching workout plans: ", error);
-    } finally {
-      setIsLoading(false);
+    }
+  }, [user]);
+
+  const fetchRecentWorkouts = useCallback(async () => {
+    if (!user) return;
+    const historyCollectionRef = collection(
+      db,
+      "users",
+      user.uid,
+      "workoutHistory"
+    );
+    // Fetch more to find unique plans
+    const q = query(
+      historyCollectionRef,
+      orderBy("completedAt", "desc"),
+      limit(20)
+    );
+    try {
+      const querySnapshot = await getDocs(q);
+      const history = querySnapshot.docs.map(
+        (doc) => ({ id: doc.id, ...doc.data() } as WorkoutHistory)
+      );
+
+      // Filter for unique plans, keeping the most recent one
+      const uniqueWorkouts: WorkoutHistory[] = [];
+      const seenPlanIds = new Set<string>();
+      for (const workout of history) {
+        if (!seenPlanIds.has(workout.planId)) {
+          uniqueWorkouts.push(workout);
+          seenPlanIds.add(workout.planId);
+        }
+        if (uniqueWorkouts.length >= 4) {
+          break; // Stop when we have 4 unique workouts
+        }
+      }
+      setRecentWorkouts(uniqueWorkouts);
+    } catch (error) {
+      console.error("Error fetching workout history: ", error);
     }
   }, [user]);
 
   useEffect(() => {
-    if (isFocused) {
-      fetchWorkoutPlans();
+    const loadData = async () => {
+      setIsLoading(true);
+      await Promise.all([fetchWorkoutPlans(), fetchRecentWorkouts()]);
+      setIsLoading(false);
+    };
+    if (isFocused && user) {
+      loadData();
+    } else if (!user) {
+      setIsLoading(false);
     }
-  }, [isFocused, fetchWorkoutPlans]);
+  }, [isFocused, user, fetchWorkoutPlans, fetchRecentWorkouts]);
 
   const handleStartPlan = (plan: WorkoutPlan) => {
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
     setActivePlan(plan);
-    setIsPlanSelectorVisible(false); // Close modal on selection
+    setIsPlanSelectorVisible(false);
+  };
+
+  const handleStartFromHistory = (historyItem: WorkoutHistory) => {
+    const planToStart = allPlans.find((plan) => plan.id === historyItem.planId);
+    if (planToStart) {
+      handleStartPlan(planToStart);
+    } else {
+      Alert.alert(
+        "Plan Not Found",
+        "This workout plan may have been deleted. Please choose another from the list."
+      );
+    }
   };
 
   const handleQuickStart = () => {
@@ -496,8 +646,69 @@ export default function WorkoutSessionScreen() {
     );
   };
 
-  const handleFinishWorkout = () => {
+  const handleClearHistory = async () => {
+    if (!user || recentWorkouts.length === 0) return;
+
+    Alert.alert(
+      "Clear Recent Workouts?",
+      "Are you sure you want to clear your workout history? This cannot be undone.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Clear",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              const historyCollectionRef = collection(
+                db,
+                "users",
+                user.uid,
+                "workoutHistory"
+              );
+              const batch = writeBatch(db);
+              const querySnapshot = await getDocs(query(historyCollectionRef));
+              querySnapshot.forEach((doc) => {
+                batch.delete(doc.ref);
+              });
+              await batch.commit();
+              setRecentWorkouts([]); // Clear state immediately
+            } catch (error) {
+              console.error("Error clearing history:", error);
+              Alert.alert(
+                "Error",
+                "Could not clear history. Please try again."
+              );
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const handleFinishWorkout = async (finishedPlan: WorkoutPlan) => {
+    if (!user) return;
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+
+    const historyDoc = {
+      planId: finishedPlan.id,
+      planName: finishedPlan.planName,
+      icon: finishedPlan.icon,
+      completedAt: serverTimestamp(),
+    };
+
+    try {
+      const historyCollectionRef = collection(
+        db,
+        "users",
+        user.uid,
+        "workoutHistory"
+      );
+      await addDoc(historyCollectionRef, historyDoc);
+      fetchRecentWorkouts();
+    } catch (error) {
+      console.error("Error saving workout history: ", error);
+    }
+
     setActivePlan(null);
   };
 
@@ -527,6 +738,9 @@ export default function WorkoutSessionScreen() {
         <StartWorkoutView
           onChoosePlan={() => setIsPlanSelectorVisible(true)}
           onQuickStart={handleQuickStart}
+          recentWorkouts={recentWorkouts}
+          onStartFromHistory={handleStartFromHistory}
+          onClearHistory={handleClearHistory}
         />
       )}
       <WorkoutPlanSelectionModal
@@ -559,13 +773,20 @@ const getStyles = (scheme: "light" | "dark") => {
       fontSize: 32,
       fontWeight: "bold",
       color: colors.text,
+      textAlign: "center",
     },
     // Start Workout View
     startViewContainer: {
       flexGrow: 1,
+      paddingHorizontal: 20,
+      marginBottom: 50,
+    },
+    mainContent: {
+      flex: 1,
+      minHeight: 500,
       justifyContent: "center",
       alignItems: "center",
-      paddingHorizontal: 20,
+      paddingTop: 250,
     },
     startViewSubtitle: {
       fontSize: 16,
@@ -583,7 +804,7 @@ const getStyles = (scheme: "light" | "dark") => {
       padding: 15,
       borderRadius: 16,
       alignItems: "center",
-      justifyContent: "center",
+      justifyContent: "flex-start",
       marginBottom: 15,
       width: "48%",
       aspectRatio: 1,
@@ -601,7 +822,7 @@ const getStyles = (scheme: "light" | "dark") => {
       alignItems: "center",
     },
     selectableCardTitle: {
-      fontSize: 16,
+      fontSize: 15,
       fontWeight: "bold",
       color: colors.text,
       textAlign: "center",
@@ -611,6 +832,14 @@ const getStyles = (scheme: "light" | "dark") => {
       fontSize: 13,
       color: colors.subtleText,
       textAlign: "center",
+    },
+    selectableCardMuscles: {
+      fontSize: 12,
+      color: colors.primary,
+      fontWeight: "600",
+      textAlign: "center",
+      marginTop: 8,
+      textTransform: "capitalize",
     },
     primaryButton: {
       flexDirection: "row",
@@ -641,6 +870,70 @@ const getStyles = (scheme: "light" | "dark") => {
       fontSize: 16,
       fontWeight: "600",
       color: colors.primary,
+    },
+    // History Section
+    historySection: {
+      width: "100%",
+      paddingBottom: 40,
+    },
+    historyTitle: {
+      fontSize: 22,
+      fontWeight: "bold",
+      color: colors.text,
+      marginBottom: 15,
+    },
+    historyCard: {
+      backgroundColor: colors.card,
+      width: "48%",
+      borderRadius: 16,
+      marginBottom: 15,
+      alignItems: "center",
+      justifyContent: "center",
+      padding: 15,
+      minHeight: 140,
+      shadowColor: "#000",
+      shadowOffset: { width: 0, height: 1 },
+      shadowOpacity: scheme === "light" ? 0.05 : 0.1,
+      shadowRadius: 3,
+      elevation: 1,
+    },
+    historyCardIcon: {
+      fontSize: 28,
+      marginBottom: 8,
+    },
+    historyCardTitle: {
+      fontSize: 14,
+      fontWeight: "600",
+      color: colors.text,
+      textAlign: "center",
+    },
+    historyCardDate: {
+      fontSize: 12,
+      color: colors.subtleText,
+      marginTop: 4,
+    },
+    historyEmpty: {
+      alignItems: "center",
+      justifyContent: "center",
+      paddingVertical: 30,
+      backgroundColor: colors.card,
+      borderRadius: 16,
+    },
+    historyEmptyText: {
+      fontSize: 15,
+      color: colors.subtleText,
+    },
+    clearHistoryButton: {
+      marginTop: 5,
+      paddingVertical: 4,
+      paddingHorizontal: 8,
+      alignSelf: "center",
+      marginBottom: 30,
+    },
+    clearHistoryButtonText: {
+      color: colors.subtleText,
+      fontSize: 14,
+      fontWeight: "600",
     },
     // Active Workout View
     activeWorkoutContainer: {
