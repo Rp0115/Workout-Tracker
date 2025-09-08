@@ -51,6 +51,7 @@ interface Workout {
   name: string;
   sets: string;
   reps: string;
+  primaryMuscles: string[];
 }
 
 interface WorkoutPlan {
@@ -59,6 +60,7 @@ interface WorkoutPlan {
   description?: string;
   selectedDays: string[];
   workouts: Omit<Workout, "id">[];
+  primaryMuscleGroups?: string[];
   order: number;
   icon?: string;
 }
@@ -353,6 +355,91 @@ const ExerciseFilter: React.FC<ExerciseFilterProps> = ({
 // =================================================================================================
 // --- MODAL COMPONENTS ---
 // =================================================================================================
+
+interface MuscleSelectionModalProps {
+  visible: boolean;
+  onClose: () => void;
+  options: string[];
+  initialSelection: string[];
+  onSave: (selection: string[]) => void;
+}
+
+const MuscleSelectionModal: React.FC<MuscleSelectionModalProps> = ({
+  visible,
+  onClose,
+  options,
+  initialSelection,
+  onSave,
+}) => {
+  const styles = getStyles(useColorScheme() ?? "light");
+  const colors = Colors[useColorScheme() ?? "light"];
+  const [selected, setSelected] = useState<string[]>(initialSelection);
+
+  useEffect(() => {
+    if (visible) {
+      setSelected(initialSelection);
+    }
+  }, [visible, initialSelection]);
+
+  const toggleSelection = (muscle: string) => {
+    setSelected((current) =>
+      current.includes(muscle)
+        ? current.filter((m) => m !== muscle)
+        : [...current, muscle]
+    );
+  };
+
+  const handleSave = () => {
+    onSave(selected);
+    onClose();
+  };
+
+  return (
+    <Modal
+      visible={visible}
+      animationType="fade"
+      transparent={true}
+      onRequestClose={onClose}
+    >
+      <View style={styles.miniModalOverlay}>
+        <View style={styles.miniModalContainer}>
+          <View style={styles.miniModalHeader}>
+            <Text style={styles.miniModalTitle}>Select Primary Muscles</Text>
+            <TouchableOpacity onPress={onClose} style={{ padding: 5 }}>
+              <Feather name="x" size={24} color={colors.subtleText} />
+            </TouchableOpacity>
+          </View>
+          <FlatList
+            data={options}
+            keyExtractor={(item) => item}
+            renderItem={({ item }) => {
+              const isSelected = selected.includes(item);
+              return (
+                <TouchableOpacity
+                  style={styles.miniModalOption}
+                  onPress={() => toggleSelection(item)}
+                >
+                  <Text style={styles.miniModalOptionText}>{item}</Text>
+                  {isSelected && (
+                    <Feather name="check" size={20} color={colors.primary} />
+                  )}
+                </TouchableOpacity>
+              );
+            }}
+            ItemSeparatorComponent={() => <View style={styles.newDivider} />}
+          />
+          <TouchableOpacity
+            style={styles.miniModalSaveButton}
+            onPress={handleSave}
+          >
+            <Text style={styles.miniModalSaveButtonText}>Save</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </Modal>
+  );
+};
+
 interface ExerciseDetailModalProps {
   visible: boolean;
   onClose: () => void;
@@ -739,10 +826,11 @@ const ExercisePickerModal: React.FC<ExercisePickerModalProps> = ({
 interface NewWorkoutRowProps extends RenderItemParams<Workout> {
   onUpdate: (
     index: number,
-    field: keyof Omit<Workout, "id">,
+    field: keyof Omit<Workout, "id" | "primaryMuscles">,
     value: string
   ) => void;
   onDelete: (id: number) => void;
+  onEditMuscles: (workout: Workout) => void;
 }
 
 const NewWorkoutRow: React.FC<NewWorkoutRowProps> = ({
@@ -752,9 +840,11 @@ const NewWorkoutRow: React.FC<NewWorkoutRowProps> = ({
   getIndex,
   onUpdate,
   onDelete,
+  onEditMuscles,
 }) => {
   const colorScheme = useColorScheme() ?? "light";
   const styles = getStyles(colorScheme);
+  const colors = Colors[colorScheme];
   const index = getIndex();
 
   if (index === undefined) return null;
@@ -773,13 +863,26 @@ const NewWorkoutRow: React.FC<NewWorkoutRowProps> = ({
         </TouchableOpacity>
 
         <View style={styles.newWorkoutInputsContainer}>
-          <TextInput
-            style={styles.newWorkoutNameInput}
-            placeholder="Workout Name"
-            placeholderTextColor={Colors[colorScheme].subtleText}
-            value={item.name}
-            onChangeText={(text) => onUpdate(index, "name", text)}
-          />
+          <View style={{ flex: 1 }}>
+            <TextInput
+              style={styles.newWorkoutNameInput}
+              placeholder="Workout Name"
+              placeholderTextColor={Colors[colorScheme].subtleText}
+              value={item.name}
+              onChangeText={(text) => onUpdate(index, "name", text)}
+            />
+            <TouchableOpacity
+              style={styles.muscleSelectorButton}
+              onPress={() => onEditMuscles(item)}
+            >
+              <Feather name="target" size={14} color={colors.subtleText} />
+              <Text style={styles.muscleSelectorText} numberOfLines={1}>
+                {item.primaryMuscles.length > 0
+                  ? item.primaryMuscles.join(", ")
+                  : "Select primary muscles"}
+              </Text>
+            </TouchableOpacity>
+          </View>
           <View style={styles.newSetsRepsContainer}>
             <View style={styles.newSetRepInputWrapper}>
               <Text style={styles.newSetRepLabel}>Sets</Text>
@@ -847,6 +950,9 @@ const PlanModal: React.FC<PlanModalProps> = ({
   const [selectedDays, setSelectedDays] = useState<string[]>([]);
   const [workouts, setWorkouts] = useState<Workout[]>([]);
   const [isPickerVisible, setIsPickerVisible] = useState(false);
+  const [editingMusclesFor, setEditingMusclesFor] = useState<Workout | null>(
+    null
+  );
 
   useEffect(() => {
     if (visible) {
@@ -854,7 +960,11 @@ const PlanModal: React.FC<PlanModalProps> = ({
       setDescription(initialPlan?.description || "");
       setSelectedDays(initialPlan?.selectedDays || []);
       const initialWorkouts =
-        initialPlan?.workouts.map((w, i) => ({ ...w, id: i })) || [];
+        initialPlan?.workouts.map((w, i) => ({
+          ...w,
+          id: i,
+          primaryMuscles: w.primaryMuscles || [],
+        })) || [];
       setWorkouts(initialWorkouts);
     }
   }, [visible, initialPlan]);
@@ -868,7 +978,7 @@ const PlanModal: React.FC<PlanModalProps> = ({
 
   const handleUpdateWorkout = (
     index: number,
-    field: keyof Omit<Workout, "id">,
+    field: keyof Omit<Workout, "id" | "primaryMuscles">,
     value: string
   ) => {
     const newWorkouts = [...workouts];
@@ -883,6 +993,7 @@ const PlanModal: React.FC<PlanModalProps> = ({
       name: "",
       sets: "",
       reps: "",
+      primaryMuscles: [],
     };
     setWorkouts((prev) => [...prev, newWorkout]);
   };
@@ -898,8 +1009,19 @@ const PlanModal: React.FC<PlanModalProps> = ({
       name: ex.name,
       sets: "",
       reps: "",
+      primaryMuscles: ex.primaryMuscles,
     }));
     setWorkouts((prev) => [...prev, ...newWorkouts]);
+  };
+
+  const handleUpdateWorkoutMuscles = (muscles: string[]) => {
+    if (editingMusclesFor === null) return;
+    const index = workouts.findIndex((w) => w.id === editingMusclesFor.id);
+    if (index > -1) {
+      const newWorkouts = [...workouts];
+      newWorkouts[index].primaryMuscles = muscles;
+      setWorkouts(newWorkouts);
+    }
   };
 
   const handleSave = () => {
@@ -908,13 +1030,29 @@ const PlanModal: React.FC<PlanModalProps> = ({
       return;
     }
 
+    const customWorkoutMissingMuscles = workouts.some(
+      (w) => w.name.trim() !== "" && w.primaryMuscles.length === 0
+    );
+
+    if (customWorkoutMissingMuscles) {
+      Alert.alert(
+        "Missing Muscle Group",
+        "Please select at least one primary muscle group for each exercise."
+      );
+      return;
+    }
+
     const workoutsToSave = workouts.map(({ id, ...rest }) => rest);
+
+    const allMuscles = workoutsToSave.flatMap((w) => w.primaryMuscles);
+    const primaryMuscleGroups = [...new Set(allMuscles)];
 
     const planData = {
       planName,
       description: description.trim(),
       selectedDays,
       workouts: workoutsToSave,
+      primaryMuscleGroups,
       order: initialPlan?.order ?? 0,
       icon: initialPlan?.icon || "💪",
     };
@@ -928,6 +1066,13 @@ const PlanModal: React.FC<PlanModalProps> = ({
         onClose={() => setIsPickerVisible(false)}
         onSelect={handleSelectExercises}
         exerciseData={exerciseData}
+      />
+      <MuscleSelectionModal
+        visible={editingMusclesFor !== null}
+        onClose={() => setEditingMusclesFor(null)}
+        options={exerciseData.muscleGroups}
+        initialSelection={editingMusclesFor?.primaryMuscles || []}
+        onSave={handleUpdateWorkoutMuscles}
       />
       <GestureHandlerRootView style={{ flex: 1 }}>
         <SafeAreaView style={styles.newModalContainer}>
@@ -959,6 +1104,7 @@ const PlanModal: React.FC<PlanModalProps> = ({
                 {...props}
                 onUpdate={handleUpdateWorkout}
                 onDelete={handleDeleteWorkout}
+                onEditMuscles={setEditingMusclesFor}
               />
             )}
             onDragBegin={() =>
@@ -1661,6 +1807,17 @@ const getStyles = (scheme: "light" | "dark") => {
       color: colors.destructive,
       fontWeight: "600",
     },
+    miniModalSaveButton: {
+      padding: 15,
+      alignItems: "center",
+      borderTopWidth: 1,
+      borderTopColor: colors.border,
+    },
+    miniModalSaveButtonText: {
+      fontSize: 16,
+      color: colors.primary,
+      fontWeight: "600",
+    },
     filterButtonsGroup: {
       marginHorizontal: 20,
       backgroundColor: colors.card,
@@ -1969,10 +2126,21 @@ const getStyles = (scheme: "light" | "dark") => {
       gap: 10,
     },
     newWorkoutNameInput: {
-      flex: 1,
       fontSize: 16,
       fontWeight: "500",
       color: colors.text,
+      paddingBottom: 4,
+    },
+    muscleSelectorButton: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 6,
+      paddingVertical: 4,
+    },
+    muscleSelectorText: {
+      color: colors.subtleText,
+      fontSize: 14,
+      flex: 1,
     },
     newSetsRepsContainer: {
       flexDirection: "column",

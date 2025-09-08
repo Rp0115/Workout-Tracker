@@ -6,7 +6,9 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  FlatList,
   LayoutAnimation,
+  Modal,
   SafeAreaView,
   ScrollView,
   StyleSheet,
@@ -56,6 +58,7 @@ interface Workout {
 interface WorkoutPlan {
   id: string;
   planName: string;
+  description?: string;
   selectedDays: string[];
   workouts: Workout[];
   order: number;
@@ -65,8 +68,6 @@ interface WorkoutPlan {
 interface SetCompletion {
   [exerciseIndex: number]: boolean[];
 }
-
-const DAYS_OF_WEEK = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 // =================================================================================================
 // --- HELPER HOOKS & FUNCTIONS ---
@@ -189,91 +190,45 @@ const SelectablePlanCard = ({
     <TouchableOpacity style={styles.selectableCard} onPress={onPress}>
       <Text style={styles.selectableCardIcon}>{plan.icon || "💪"}</Text>
       <View style={styles.selectableCardInfo}>
-        <Text style={styles.selectableCardTitle}>{plan.planName}</Text>
-        <Text style={styles.selectableCardSubtitle}>
-          {plan.workouts.length} exercises
+        <Text style={styles.selectableCardTitle} numberOfLines={2}>
+          {plan.planName}
+        </Text>
+        <Text style={styles.selectableCardSubtitle} numberOfLines={3}>
+          {plan.description || `${plan.workouts.length} exercises`}
         </Text>
       </View>
-      <Feather
-        name="chevron-right"
-        size={24}
-        color={styles.selectableCardSubtitle.color}
-      />
     </TouchableOpacity>
   );
 };
 
-const PreWorkoutView = ({
-  allPlans,
-  todaysPlan,
-  onStartPlan,
+const StartWorkoutView = ({
+  onChoosePlan,
   onQuickStart,
 }: {
-  allPlans: WorkoutPlan[];
-  todaysPlan: WorkoutPlan | null;
-  onStartPlan: (plan: WorkoutPlan) => void;
+  onChoosePlan: () => void;
   onQuickStart: () => void;
 }) => {
   const styles = getStyles(useColorScheme() ?? "light");
-  const otherPlans = allPlans.filter((p) => p.id !== todaysPlan?.id);
-
+  const colors = Colors[useColorScheme() ?? "light"];
   return (
-    <ScrollView contentContainerStyle={styles.preWorkoutContainer}>
+    <ScrollView contentContainerStyle={styles.startViewContainer}>
       <Text style={styles.pageTitle}>Start Session</Text>
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Today's Suggestion</Text>
-        {todaysPlan ? (
-          <TouchableOpacity
-            style={styles.startCard}
-            onPress={() => onStartPlan(todaysPlan)}
-          >
-            <View style={styles.startCardGradient} />
-            <Text style={styles.startCardIcon}>{todaysPlan.icon || "📅"}</Text>
-            <Text style={styles.startCardTitle}>{todaysPlan.planName}</Text>
-            <Text style={styles.startCardSubtitle}>
-              {todaysPlan.workouts.length} exercises
-            </Text>
-            <View style={styles.startCardPlayButton}>
-              <Feather name="play" size={22} color={Colors.light.primary} />
-            </View>
-          </TouchableOpacity>
-        ) : (
-          <View style={styles.noPlanCard}>
-            <Text style={styles.noPlanText}>
-              No workout scheduled for today.
-            </Text>
-            <Text style={styles.noPlanSubText}>
-              Choose a plan below or start a quick session.
-            </Text>
-          </View>
-        )}
-      </View>
-
-      {otherPlans.length > 0 && (
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Choose Another Plan</Text>
-          {otherPlans.map((plan) => (
-            <SelectablePlanCard
-              key={plan.id}
-              plan={plan}
-              onPress={() => onStartPlan(plan)}
-            />
-          ))}
-        </View>
-      )}
-
-      <View style={styles.section}>
-        <TouchableOpacity style={styles.secondaryButton} onPress={onQuickStart}>
-          <Feather
-            name="plus-circle"
-            size={20}
-            color={styles.secondaryButtonText.color}
-          />
-          <Text style={styles.secondaryButtonText}>
-            Quick Start Empty Session
-          </Text>
-        </TouchableOpacity>
-      </View>
+      <Text style={styles.startViewSubtitle}>
+        Select a workout plan to begin your training.
+      </Text>
+      <TouchableOpacity style={styles.primaryButton} onPress={onChoosePlan}>
+        <Feather name="list" size={20} color="#FFFFFF" />
+        <Text style={styles.primaryButtonText}>Choose Workout Plan</Text>
+      </TouchableOpacity>
+      <TouchableOpacity
+        style={[styles.secondaryButton, { marginTop: 15 }]}
+        onPress={onQuickStart}
+      >
+        <Feather name="plus-circle" size={20} color={colors.primary} />
+        <Text style={styles.secondaryButtonText}>
+          Quick Start Empty Session
+        </Text>
+      </TouchableOpacity>
     </ScrollView>
   );
 };
@@ -434,6 +389,54 @@ const ActiveWorkoutView = ({
   );
 };
 
+const WorkoutPlanSelectionModal = ({
+  visible,
+  onClose,
+  plans,
+  onSelectPlan,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  plans: WorkoutPlan[];
+  onSelectPlan: (plan: WorkoutPlan) => void;
+}) => {
+  const styles = getStyles(useColorScheme() ?? "light");
+  const colors = Colors[useColorScheme() ?? "light"];
+
+  return (
+    <Modal
+      animationType="fade"
+      transparent={true}
+      visible={visible}
+      onRequestClose={onClose}
+    >
+      <View style={styles.modalOverlay}>
+        <SafeAreaView style={styles.modalContainer}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>Choose a Plan</Text>
+            <TouchableOpacity onPress={onClose}>
+              <Feather name="x-circle" size={26} color={colors.subtleText} />
+            </TouchableOpacity>
+          </View>
+          <FlatList
+            data={plans}
+            keyExtractor={(item) => item.id}
+            numColumns={2}
+            columnWrapperStyle={styles.gridRow}
+            renderItem={({ item }) => (
+              <SelectablePlanCard
+                plan={item}
+                onPress={() => onSelectPlan(item)}
+              />
+            )}
+            contentContainerStyle={styles.modalListContent}
+          />
+        </SafeAreaView>
+      </View>
+    </Modal>
+  );
+};
+
 // =================================================================================================
 // --- MAIN SCREEN ---
 // =================================================================================================
@@ -445,16 +448,14 @@ export default function WorkoutSessionScreen() {
 
   const [isLoading, setIsLoading] = useState(true);
   const [allPlans, setAllPlans] = useState<WorkoutPlan[]>([]);
-  const [todaysPlan, setTodaysPlan] = useState<WorkoutPlan | null>(null);
   const [activePlan, setActivePlan] = useState<WorkoutPlan | null>(null);
+  const [isPlanSelectorVisible, setIsPlanSelectorVisible] = useState(false);
 
   const fetchWorkoutPlans = useCallback(async () => {
     if (!user) {
       setIsLoading(false);
       return;
     }
-    // Don't show loader on re-focus, only on initial load
-    // setIsLoading(true);
     const plansCollectionRef = collection(
       db,
       "users",
@@ -469,13 +470,6 @@ export default function WorkoutSessionScreen() {
         .sort((a, b) => a.order - b.order);
 
       setAllPlans(plans);
-
-      const todayIndex = new Date().getDay();
-      const todayShort = DAYS_OF_WEEK[todayIndex];
-      const planForToday =
-        plans.find((plan) => plan.selectedDays.includes(todayShort)) || null;
-
-      setTodaysPlan(planForToday);
     } catch (error) {
       console.error("Error fetching workout plans: ", error);
     } finally {
@@ -492,6 +486,7 @@ export default function WorkoutSessionScreen() {
   const handleStartPlan = (plan: WorkoutPlan) => {
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
     setActivePlan(plan);
+    setIsPlanSelectorVisible(false); // Close modal on selection
   };
 
   const handleQuickStart = () => {
@@ -529,13 +524,17 @@ export default function WorkoutSessionScreen() {
           <ActiveWorkoutView plan={activePlan} onFinish={handleFinishWorkout} />
         </>
       ) : (
-        <PreWorkoutView
-          allPlans={allPlans}
-          todaysPlan={todaysPlan}
-          onStartPlan={handleStartPlan}
+        <StartWorkoutView
+          onChoosePlan={() => setIsPlanSelectorVisible(true)}
           onQuickStart={handleQuickStart}
         />
       )}
+      <WorkoutPlanSelectionModal
+        visible={isPlanSelectorVisible}
+        onClose={() => setIsPlanSelectorVisible(false)}
+        plans={allPlans}
+        onSelectPlan={handleStartPlan}
+      />
     </SafeAreaView>
   );
 }
@@ -560,109 +559,73 @@ const getStyles = (scheme: "light" | "dark") => {
       fontSize: 32,
       fontWeight: "bold",
       color: colors.text,
-      marginBottom: 10,
     },
-    // Pre-Workout View
-    preWorkoutContainer: {
-      paddingHorizontal: 20,
-      paddingTop: 10,
-      paddingBottom: 50, // Added margin for bottom nav bar
-    },
-    section: {
-      marginBottom: 20,
-    },
-    sectionTitle: {
-      fontSize: 18,
-      fontWeight: "bold",
-      color: colors.text,
-      marginBottom: 15,
-    },
-    startCard: {
-      backgroundColor: colors.primary,
-      padding: 25,
-      borderRadius: 24,
-      alignItems: "center",
-      overflow: "hidden",
-      shadowColor: "#000",
-      shadowOffset: { width: 0, height: 4 },
-      shadowOpacity: 0.3,
-      shadowRadius: 8,
-      elevation: 10,
-    },
-    startCardGradient: {
-      position: "absolute",
-      top: 0,
-      left: 0,
-      right: 0,
-      bottom: 0,
-      backgroundColor: colors.primaryAccent,
-      opacity: 0.3,
-      transform: [{ rotate: "-45deg" }, { scale: 2 }],
-    },
-    startCardIcon: {
-      fontSize: 40,
-      marginBottom: 10,
-    },
-    startCardTitle: {
-      fontSize: 24,
-      fontWeight: "bold",
-      color: "#FFFFFF",
-    },
-    startCardSubtitle: {
-      fontSize: 16,
-      color: "rgba(255, 255, 255, 0.9)",
-      marginTop: 4,
-      marginBottom: 20,
-    },
-    startCardPlayButton: {
-      backgroundColor: "#FFFFFF",
-      width: 50,
-      height: 50,
-      borderRadius: 25,
+    // Start Workout View
+    startViewContainer: {
+      flexGrow: 1,
       justifyContent: "center",
       alignItems: "center",
+      paddingHorizontal: 20,
     },
-    noPlanCard: {
-      backgroundColor: colors.card,
-      padding: 25,
-      borderRadius: 24,
-      alignItems: "center",
-    },
-    noPlanText: {
-      fontSize: 18,
-      fontWeight: "bold",
-      color: colors.text,
-    },
-    noPlanSubText: {
-      fontSize: 14,
+    startViewSubtitle: {
+      fontSize: 16,
       color: colors.subtleText,
       textAlign: "center",
       marginTop: 8,
+      marginBottom: 30,
+    },
+    // Grid styles
+    gridRow: {
+      justifyContent: "space-between",
     },
     selectableCard: {
       backgroundColor: colors.card,
       padding: 15,
       borderRadius: 16,
-      flexDirection: "row",
       alignItems: "center",
-      marginBottom: 10,
+      justifyContent: "center",
+      marginBottom: 15,
+      width: "48%",
+      aspectRatio: 1,
+      shadowColor: "#000",
+      shadowOffset: { width: 0, height: 1 },
+      shadowOpacity: scheme === "light" ? 0.05 : 0.1,
+      shadowRadius: 3,
+      elevation: 1,
     },
     selectableCardIcon: {
-      fontSize: 24,
-      marginRight: 15,
+      fontSize: 32,
+      marginBottom: 10,
     },
     selectableCardInfo: {
-      flex: 1,
+      alignItems: "center",
     },
     selectableCardTitle: {
       fontSize: 16,
       fontWeight: "bold",
       color: colors.text,
+      textAlign: "center",
+      marginBottom: 4,
     },
     selectableCardSubtitle: {
-      fontSize: 14,
+      fontSize: 13,
       color: colors.subtleText,
-      marginTop: 2,
+      textAlign: "center",
+    },
+    primaryButton: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "center",
+      padding: 16,
+      gap: 10,
+      backgroundColor: colors.primary,
+      borderRadius: 16,
+      width: "100%",
+    },
+    primaryButtonText: {
+      fontSize: 16,
+      fontWeight: "600",
+      color: "#FFFFFF",
     },
     secondaryButton: {
       flexDirection: "row",
@@ -672,6 +635,7 @@ const getStyles = (scheme: "light" | "dark") => {
       gap: 10,
       backgroundColor: colors.card,
       borderRadius: 16,
+      width: "100%",
     },
     secondaryButtonText: {
       fontSize: 16,
@@ -712,6 +676,8 @@ const getStyles = (scheme: "light" | "dark") => {
       elevation: 2,
     },
     exerciseCardActive: {
+      borderColor: colors.primary,
+      borderWidth: 1,
       shadowColor: colors.primary,
       shadowOpacity: scheme === "light" ? 0.2 : 0.5,
       shadowRadius: 8,
@@ -783,6 +749,8 @@ const getStyles = (scheme: "light" | "dark") => {
       padding: 20,
       paddingBottom: 30,
       backgroundColor: colors.background,
+      borderTopWidth: 1,
+      borderTopColor: colors.border,
     },
     musicCard: {
       backgroundColor: colors.card,
@@ -830,6 +798,40 @@ const getStyles = (scheme: "light" | "dark") => {
       fontSize: 18,
       fontWeight: "bold",
       color: "#FFFFFF",
+    },
+    // Modal Styles
+    modalOverlay: {
+      flex: 1,
+      backgroundColor: "rgba(0, 0, 0, 0.6)",
+      justifyContent: "center",
+      alignItems: "center",
+      padding: 20,
+    },
+    modalContainer: {
+      backgroundColor: colors.background,
+      borderRadius: 24,
+      width: "100%",
+      maxHeight: "85%",
+    },
+    modalHeader: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
+      paddingHorizontal: 20,
+      paddingTop: 20,
+      paddingBottom: 10,
+      borderBottomWidth: 1,
+      borderBottomColor: colors.border,
+    },
+    modalTitle: {
+      fontSize: 22,
+      fontWeight: "bold",
+      color: colors.text,
+    },
+    modalListContent: {
+      paddingHorizontal: 20,
+      paddingTop: 20,
+      paddingBottom: 40,
     },
   });
 };
