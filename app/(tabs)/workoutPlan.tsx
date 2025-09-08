@@ -104,32 +104,114 @@ const SNAP_INTERVAL = CARD_WIDTH + CARD_MARGIN * 2;
 // --- REUSABLE FILTER COMPONENTS ---
 // =================================================================================================
 
-interface FilterChipProps {
-  label: string;
-  isSelected: boolean;
-  onPress: () => void;
+interface FilterSelectionModalProps {
+  visible: boolean;
+  onClose: () => void;
+  title: string;
+  options: string[];
+  selectedValue: string | null;
+  onSelect: (value: string | null) => void;
 }
 
-const FilterChip: React.FC<FilterChipProps> = ({
-  label,
-  isSelected,
-  onPress,
+const FilterSelectionModal: React.FC<FilterSelectionModalProps> = ({
+  visible,
+  onClose,
+  title,
+  options,
+  selectedValue,
+  onSelect,
 }) => {
   const colorScheme = useColorScheme() ?? "light";
   const styles = getStyles(colorScheme);
+  const colors = Colors[colorScheme];
+
   return (
-    <TouchableOpacity
-      onPress={onPress}
-      style={[styles.categoryChip, isSelected && styles.categoryChipSelected]}
+    <Modal
+      visible={visible}
+      animationType="fade"
+      transparent={true}
+      onRequestClose={onClose}
     >
-      <Text
-        style={[
-          styles.categoryChipText,
-          isSelected && styles.categoryChipTextSelected,
-        ]}
+      <TouchableOpacity
+        style={styles.miniModalOverlay}
+        activeOpacity={1}
+        onPress={onClose}
       >
-        {label}
-      </Text>
+        <TouchableOpacity
+          style={styles.miniModalContainer}
+          activeOpacity={1}
+          onPress={(e) => e.stopPropagation()}
+        >
+          <View style={styles.miniModalHeader}>
+            <Text style={styles.miniModalTitle}>{title}</Text>
+            <TouchableOpacity onPress={onClose} style={{ padding: 5 }}>
+              <Feather name="x" size={24} color={colors.subtleText} />
+            </TouchableOpacity>
+          </View>
+          <FlatList
+            data={options}
+            keyExtractor={(item) => item}
+            renderItem={({ item }) => (
+              <TouchableOpacity
+                style={styles.miniModalOption}
+                onPress={() => {
+                  onSelect(item);
+                  onClose();
+                }}
+              >
+                <Text style={styles.miniModalOptionText}>{item}</Text>
+                {selectedValue === item && (
+                  <Feather name="check" size={20} color={colors.primary} />
+                )}
+              </TouchableOpacity>
+            )}
+            ItemSeparatorComponent={() => <View style={styles.newDivider} />}
+          />
+          <TouchableOpacity
+            style={styles.miniModalClearButton}
+            onPress={() => {
+              onSelect(null);
+              onClose();
+            }}
+          >
+            <Text style={styles.miniModalClearButtonText}>Clear Filter</Text>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </TouchableOpacity>
+    </Modal>
+  );
+};
+
+interface FilterButtonProps {
+  label: string;
+  value: string | null;
+  onPress: () => void;
+}
+
+const FilterButton: React.FC<FilterButtonProps> = ({
+  label,
+  value,
+  onPress,
+}) => {
+  const styles = getStyles(useColorScheme() ?? "light");
+  const colors = Colors[useColorScheme() ?? "light"];
+  const isSelected = value !== null;
+
+  return (
+    <TouchableOpacity style={styles.filterButton} onPress={onPress}>
+      <Text style={styles.filterButtonLabel}>{label}</Text>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+        <Text
+          style={[
+            styles.filterButtonValue,
+            isSelected && { color: colors.primary, fontWeight: "600" },
+          ]}
+          numberOfLines={1}
+        >
+          {value || "Any"}
+        </Text>
+        <Feather name="chevron-right" size={18} color={colors.subtleText} />
+      </View>
     </TouchableOpacity>
   );
 };
@@ -146,17 +228,58 @@ const ExerciseFilter: React.FC<ExerciseFilterProps> = ({
   onUpdateFilters,
 }) => {
   const styles = getStyles(useColorScheme() ?? "light");
+  const [activeFilter, setActiveFilter] = useState<keyof Filters | null>(null);
 
   const handleFilterSelect = (type: keyof Filters, value: string | null) => {
     onUpdateFilters({
       ...selectedFilters,
-      [type]: selectedFilters[type] === value ? null : value,
+      [type]: value,
     });
   };
 
   const hasActiveFilter = Object.values(selectedFilters).some(
     (v) => v !== null
   );
+
+  const getModalProps = () => {
+    if (!activeFilter) return null;
+    switch (activeFilter) {
+      case "muscle":
+        return {
+          title: "Select Muscle Group",
+          options: filterOptions.muscleGroups,
+          selectedValue: selectedFilters.muscle,
+        };
+      case "equipment":
+        return {
+          title: "Select Equipment",
+          options: filterOptions.equipment,
+          selectedValue: selectedFilters.equipment,
+        };
+      case "level":
+        return {
+          title: "Select Difficulty",
+          options: filterOptions.levels,
+          selectedValue: selectedFilters.level,
+        };
+      case "category":
+        return {
+          title: "Select Category",
+          options: filterOptions.categories,
+          selectedValue: selectedFilters.category,
+        };
+      case "force":
+        return {
+          title: "Select Force Type",
+          options: filterOptions.forces,
+          selectedValue: selectedFilters.force,
+        };
+      default:
+        return null;
+    }
+  };
+
+  const modalProps = getModalProps();
 
   return (
     <View style={styles.modalFilterContainer}>
@@ -174,75 +297,55 @@ const ExerciseFilter: React.FC<ExerciseFilterProps> = ({
               })
             }
           >
-            <Text style={styles.clearFilterText}>Clear Filters</Text>
+            <Text style={styles.clearFilterText}>Clear All</Text>
           </TouchableOpacity>
         )}
       </View>
 
-      <Text style={styles.filterSectionTitle}>Muscle Group</Text>
-      <FlatList
-        data={filterOptions.muscleGroups}
-        renderItem={({ item }) => (
-          <FilterChip
-            label={item}
-            isSelected={selectedFilters.muscle === item}
-            onPress={() => handleFilterSelect("muscle", item)}
-          />
-        )}
-        keyExtractor={(item) => item}
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={{ paddingHorizontal: 20, paddingVertical: 10 }}
-        ItemSeparatorComponent={() => <View style={{ width: 10 }} />}
-      />
-
-      <Text style={styles.filterSectionTitle}>Equipment</Text>
-      <View style={styles.categoryChipContainer}>
-        {filterOptions.equipment.map((item) => (
-          <FilterChip
-            key={item}
-            label={item}
-            isSelected={selectedFilters.equipment === item}
-            onPress={() => handleFilterSelect("equipment", item)}
-          />
-        ))}
+      <View style={styles.filterButtonsGroup}>
+        <FilterButton
+          label="Muscle Group"
+          value={selectedFilters.muscle}
+          onPress={() => setActiveFilter("muscle")}
+        />
+        <View style={styles.newDivider} />
+        <FilterButton
+          label="Equipment"
+          value={selectedFilters.equipment}
+          onPress={() => setActiveFilter("equipment")}
+        />
+        <View style={styles.newDivider} />
+        <FilterButton
+          label="Difficulty"
+          value={selectedFilters.level}
+          onPress={() => setActiveFilter("level")}
+        />
+        <View style={styles.newDivider} />
+        <FilterButton
+          label="Category"
+          value={selectedFilters.category}
+          onPress={() => setActiveFilter("category")}
+        />
+        <View style={styles.newDivider} />
+        <FilterButton
+          label="Force Type"
+          value={selectedFilters.force}
+          onPress={() => setActiveFilter("force")}
+        />
       </View>
 
-      <Text style={styles.filterSectionTitle}>Difficulty Level</Text>
-      <View style={styles.categoryChipContainer}>
-        {filterOptions.levels.map((item) => (
-          <FilterChip
-            key={item}
-            label={item}
-            isSelected={selectedFilters.level === item}
-            onPress={() => handleFilterSelect("level", item)}
-          />
-        ))}
-      </View>
-
-      <Text style={styles.filterSectionTitle}>Category</Text>
-      <View style={styles.categoryChipContainer}>
-        {filterOptions.categories.map((item) => (
-          <FilterChip
-            key={item}
-            label={item}
-            isSelected={selectedFilters.category === item}
-            onPress={() => handleFilterSelect("category", item)}
-          />
-        ))}
-      </View>
-
-      <Text style={styles.filterSectionTitle}>Force Type</Text>
-      <View style={styles.categoryChipContainer}>
-        {filterOptions.forces.map((item) => (
-          <FilterChip
-            key={item}
-            label={item}
-            isSelected={selectedFilters.force === item}
-            onPress={() => handleFilterSelect("force", item)}
-          />
-        ))}
-      </View>
+      {modalProps && activeFilter && (
+        <FilterSelectionModal
+          visible={!!activeFilter}
+          onClose={() => setActiveFilter(null)}
+          title={modalProps.title}
+          options={modalProps.options}
+          selectedValue={modalProps.selectedValue}
+          onSelect={(value) => {
+            handleFilterSelect(activeFilter, value);
+          }}
+        />
+      )}
     </View>
   );
 };
@@ -1504,6 +1607,86 @@ export default function WorkoutPlanScreen() {
 const getStyles = (scheme: "light" | "dark") => {
   const colors = Colors[scheme];
   return StyleSheet.create({
+    // New Filter Styles
+    miniModalOverlay: {
+      flex: 1,
+      backgroundColor: "rgba(0,0,0,0.5)",
+      justifyContent: "center",
+      alignItems: "center",
+    },
+    miniModalContainer: {
+      backgroundColor: colors.card,
+      borderRadius: 15,
+      width: "85%",
+      maxHeight: "70%",
+      shadowColor: "#000",
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.25,
+      shadowRadius: 4,
+      elevation: 5,
+    },
+    miniModalHeader: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
+      padding: 15,
+      borderBottomWidth: 1,
+      borderBottomColor: colors.border,
+    },
+    miniModalTitle: {
+      fontSize: 18,
+      fontWeight: "bold",
+      color: colors.text,
+    },
+    miniModalOption: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
+      paddingVertical: 15,
+      paddingHorizontal: 20,
+    },
+    miniModalOptionText: {
+      fontSize: 16,
+      color: colors.text,
+      textTransform: "capitalize",
+    },
+    miniModalClearButton: {
+      padding: 15,
+      alignItems: "center",
+      borderTopWidth: 1,
+      borderTopColor: colors.border,
+    },
+    miniModalClearButtonText: {
+      fontSize: 16,
+      color: colors.destructive,
+      fontWeight: "600",
+    },
+    filterButtonsGroup: {
+      marginHorizontal: 20,
+      backgroundColor: colors.card,
+      borderRadius: 12,
+      overflow: "hidden",
+    },
+    filterButton: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
+      padding: 15,
+      backgroundColor: colors.card,
+    },
+    filterButtonLabel: {
+      fontSize: 16,
+      color: colors.text,
+      fontWeight: "500",
+    },
+    filterButtonValue: {
+      fontSize: 16,
+      color: colors.subtleText,
+      textTransform: "capitalize",
+      maxWidth: screenWidth * 0.4,
+    },
+
+    // Existing Styles
     exploreSection: {
       marginTop: 40,
     },
@@ -1520,35 +1703,6 @@ const getStyles = (scheme: "light" | "dark") => {
       color: colors.subtleText,
       paddingHorizontal: 20,
       marginBottom: 5,
-    },
-    categoryChipContainer: {
-      flexDirection: "row",
-      flexWrap: "wrap",
-      gap: 10,
-      paddingHorizontal: 20,
-      marginTop: 10,
-      paddingBottom: 10,
-    },
-    categoryChip: {
-      backgroundColor: colors.card,
-      paddingVertical: 8,
-      paddingHorizontal: 16,
-      borderRadius: 20,
-      borderWidth: 1,
-      borderColor: colors.border,
-    },
-    categoryChipSelected: {
-      backgroundColor: colors.primary,
-      borderColor: colors.primary,
-    },
-    categoryChipText: {
-      color: colors.text,
-      fontSize: 14,
-      fontWeight: "500",
-      textTransform: "capitalize",
-    },
-    categoryChipTextSelected: {
-      color: "white",
     },
     exerciseCard: {
       backgroundColor: colors.card,
@@ -1577,7 +1731,7 @@ const getStyles = (scheme: "light" | "dark") => {
       justifyContent: "space-between",
       alignItems: "center",
       paddingRight: 20,
-      marginBottom: -5,
+      marginBottom: 10,
     },
     clearFilterText: {
       color: colors.primary,
@@ -1614,14 +1768,6 @@ const getStyles = (scheme: "light" | "dark") => {
       borderBottomWidth: 1,
       borderBottomColor: colors.border,
       marginBottom: 15,
-    },
-    filterSectionTitle: {
-      fontSize: 14,
-      fontWeight: "bold",
-      color: colors.subtleText,
-      paddingHorizontal: 20,
-      marginTop: 10,
-      textTransform: "uppercase",
     },
     searchContainer: {
       paddingHorizontal: 15,
@@ -1684,7 +1830,11 @@ const getStyles = (scheme: "light" | "dark") => {
       borderBottomWidth: 1,
       borderBottomColor: colors.border,
     },
-    newHeaderButton: { padding: 5, minWidth: 60, alignItems: "flex-end" },
+    newHeaderButton: {
+      padding: 5,
+      minWidth: 60,
+      alignItems: "flex-end",
+    },
     newHeaderButtonText: { fontSize: 17, color: colors.primary },
     newModalTitle: {
       fontSize: 17,
@@ -1788,7 +1938,11 @@ const getStyles = (scheme: "light" | "dark") => {
       marginHorizontal: 3,
     },
     newDayButtonSelected: { backgroundColor: colors.primary },
-    newDayButtonText: { fontSize: 14, fontWeight: "600", color: colors.text },
+    newDayButtonText: {
+      fontSize: 14,
+      fontWeight: "600",
+      color: colors.text,
+    },
     newDayButtonTextSelected: { color: "white" },
     newWorkoutCard: {
       backgroundColor: colors.card,
@@ -1832,7 +1986,11 @@ const getStyles = (scheme: "light" | "dark") => {
       paddingHorizontal: 8,
       paddingVertical: 4,
     },
-    newSetRepLabel: { fontSize: 14, color: colors.subtleText, marginRight: 5 },
+    newSetRepLabel: {
+      fontSize: 14,
+      color: colors.subtleText,
+      marginRight: 5,
+    },
     newSetRepInput: {
       fontSize: 16,
       color: colors.text,
@@ -1860,7 +2018,11 @@ const getStyles = (scheme: "light" | "dark") => {
       fontSize: 16,
       fontWeight: "bold",
     },
-    newDeletePlanButton: { alignItems: "center", padding: 15, marginTop: 20 },
+    newDeletePlanButton: {
+      alignItems: "center",
+      padding: 15,
+      marginTop: 20,
+    },
     newDeletePlanButtonText: {
       color: colors.destructive,
       fontSize: 16,
@@ -1951,8 +2113,13 @@ const getStyles = (scheme: "light" | "dark") => {
       alignItems: "center",
     },
     cardDayBubbleSelected: { backgroundColor: "#FFFFFF" },
-    cardDayText: { color: "rgba(255, 255, 255, 0.7)", fontWeight: "bold" },
-    cardDayTextSelected: { color: scheme === "light" ? "#A855F7" : "#4F46E5" },
+    cardDayText: {
+      color: "rgba(255, 255, 255, 0.7)",
+      fontWeight: "bold",
+    },
+    cardDayTextSelected: {
+      color: scheme === "light" ? "#A855F7" : "#4F46E5",
+    },
     emptyContainer: {
       height: CARD_HEIGHT,
       justifyContent: "center",

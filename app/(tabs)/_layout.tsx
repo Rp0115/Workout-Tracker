@@ -43,6 +43,19 @@ export default function TabLayout() {
           tabBarIcon: ({ color }) => (
             <IconSymbol
               size={28}
+              name="list.bullet.clipboard.fill"
+              color={color}
+            />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="start"
+        options={{
+          title: "Start",
+          tabBarIcon: ({ color }) => (
+            <IconSymbol
+              size={28}
               name="figure.strengthtraining.traditional"
               color={color}
             />
