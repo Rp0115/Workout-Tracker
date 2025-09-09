@@ -29,6 +29,7 @@ import {
 } from "react-native";
 
 import { useAuth } from "../../context/AuthContext";
+import exercises from "../../exercises.json"; // Import exercise data
 import { db } from "../../firebaseConfig";
 
 // --- MODERN COLOR PALETTE ---
@@ -86,6 +87,19 @@ interface WorkoutHistory {
 
 interface SetCompletion {
   [exerciseIndex: number]: boolean[];
+}
+
+interface Exercise {
+  id: string;
+  name: string;
+  force: string | null;
+  level: string;
+  mechanic: string | null;
+  equipment: string | null;
+  primaryMuscles: string[];
+  secondaryMuscles: string[];
+  instructions: string[];
+  category: string;
 }
 
 // =================================================================================================
@@ -265,13 +279,13 @@ const StartWorkoutView = ({
   onChoosePlan,
   onQuickStart,
   recentWorkouts,
-  onStartFromHistory,
+  onPreviewFromHistory,
   onClearHistory,
 }: {
   onChoosePlan: () => void;
   onQuickStart: () => void;
   recentWorkouts: WorkoutHistory[];
-  onStartFromHistory: (historyItem: WorkoutHistory) => void;
+  onPreviewFromHistory: (historyItem: WorkoutHistory) => void;
   onClearHistory: () => void;
 }) => {
   const styles = getStyles(useColorScheme() ?? "light");
@@ -311,7 +325,7 @@ const StartWorkoutView = ({
               renderItem={({ item }) => (
                 <HistoryCard
                   item={item}
-                  onPress={() => onStartFromHistory(item)}
+                  onPress={() => onPreviewFromHistory(item)}
                 />
               )}
             />
@@ -337,9 +351,11 @@ const StartWorkoutView = ({
 const ActiveWorkoutView = ({
   plan,
   onFinish,
+  onViewExerciseDetails,
 }: {
   plan: WorkoutPlan;
   onFinish: (finishedPlan: WorkoutPlan) => void;
+  onViewExerciseDetails: (exercise: Workout) => void;
 }) => {
   const styles = getStyles(useColorScheme() ?? "light");
   const colors = Colors[useColorScheme() ?? "light"];
@@ -407,20 +423,20 @@ const ActiveWorkoutView = ({
 
   return (
     <View style={styles.activeWorkoutContainer}>
-      <View style={styles.timerContainer}>
-        <Text style={styles.timerLabel}>
-          {isResting ? "RESTING" : "ELAPSED TIME"}
-        </Text>
-        <Text style={styles.timerText}>
-          {isResting
-            ? `00:${restTimer.time.toString().padStart(2, "0")}`
-            : workoutTimer.formattedTime}
-        </Text>
-      </View>
+      <ScrollView contentContainerStyle={styles.activeWorkoutScrollView}>
+        <View style={styles.timerContainer}>
+          <View>
+            <Text style={styles.timerLabel}>
+              {isResting ? "RESTING" : "ELAPSED TIME"}
+            </Text>
+            <Text style={styles.timerText}>
+              {isResting
+                ? `00:${restTimer.time.toString().padStart(2, "0")}`
+                : workoutTimer.formattedTime}
+            </Text>
+          </View>
+        </View>
 
-      <ScrollView
-        contentContainerStyle={{ paddingBottom: 220, paddingTop: 10 }}
-      >
         {plan.workouts.map((exercise, exIndex) => (
           <View
             key={exIndex}
@@ -430,13 +446,15 @@ const ActiveWorkoutView = ({
             ]}
           >
             <View style={styles.exerciseHeader}>
-              <View>
+              <View style={{ flex: 1, marginRight: 10 }}>
                 <Text style={styles.exerciseName}>{exercise.name}</Text>
                 <Text style={styles.exerciseDetails}>
                   {exercise.sets} sets, {exercise.reps} reps
                 </Text>
               </View>
-              <Feather name="info" size={22} color={colors.subtleText} />
+              <TouchableOpacity onPress={() => onViewExerciseDetails(exercise)}>
+                <Feather name="info" size={22} color={colors.subtleText} />
+              </TouchableOpacity>
             </View>
             <View style={styles.setsContainer}>
               {Array.from({ length: Number(exercise.sets) || 0 }).map(
@@ -490,6 +508,72 @@ const ActiveWorkoutView = ({
   );
 };
 
+const WorkoutPlanPreviewModal = ({
+  visible,
+  onClose,
+  plan,
+  onStart,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  plan: WorkoutPlan | null;
+  onStart: (plan: WorkoutPlan) => void;
+}) => {
+  const styles = getStyles(useColorScheme() ?? "light");
+  const colors = Colors[useColorScheme() ?? "light"];
+
+  if (!plan) {
+    return null;
+  }
+
+  return (
+    <Modal
+      animationType="fade"
+      transparent={true}
+      visible={visible}
+      onRequestClose={onClose}
+    >
+      <View style={styles.previewModalOverlay}>
+        <SafeAreaView style={styles.previewModalContainer}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>{plan.planName}</Text>
+            <TouchableOpacity onPress={onClose}>
+              <Feather name="x-circle" size={26} color={colors.subtleText} />
+            </TouchableOpacity>
+          </View>
+          <FlatList
+            data={plan.workouts}
+            keyExtractor={(item, index) => `${item.name}-${index}`}
+            contentContainerStyle={styles.previewListContent}
+            ItemSeparatorComponent={() => (
+              <View style={styles.previewSeparator} />
+            )}
+            renderItem={({ item, index }) => (
+              <View style={styles.previewExerciseCard}>
+                <Text style={styles.previewExerciseNumber}>{index + 1}</Text>
+                <View style={styles.previewExerciseInfo}>
+                  <Text style={styles.previewExerciseName}>{item.name}</Text>
+                  <Text style={styles.previewExerciseDetails}>
+                    {item.sets} sets x {item.reps} reps
+                  </Text>
+                </View>
+              </View>
+            )}
+          />
+          <View style={styles.previewFooter}>
+            <TouchableOpacity
+              style={styles.previewStartButton}
+              onPress={() => onStart(plan)}
+            >
+              <Text style={styles.previewStartButtonText}>Start Workout</Text>
+            </TouchableOpacity>
+          </View>
+        </SafeAreaView>
+      </View>
+    </Modal>
+  );
+};
+
 const WorkoutPlanSelectionModal = ({
   visible,
   onClose,
@@ -538,6 +622,80 @@ const WorkoutPlanSelectionModal = ({
   );
 };
 
+const ExerciseDetailModal = ({
+  visible,
+  onClose,
+  exercise,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  exercise: Exercise | null;
+}) => {
+  const styles = getStyles(useColorScheme() ?? "light");
+  const colors = Colors[useColorScheme() ?? "light"];
+
+  if (!exercise) return null;
+
+  const detailItems = [
+    { label: "Level", value: exercise.level },
+    { label: "Equipment", value: exercise.equipment },
+    { label: "Category", value: exercise.category },
+    { label: "Force", value: exercise.force },
+    { label: "Mechanic", value: exercise.mechanic },
+  ].filter((item) => item.value);
+
+  return (
+    <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
+      <SafeAreaView style={styles.detailModalContainer}>
+        <View style={styles.modalHeader}>
+          <Text style={styles.modalTitle} numberOfLines={2}>
+            {exercise.name}
+          </Text>
+          <TouchableOpacity onPress={onClose}>
+            <Feather name="x-circle" size={26} color={colors.subtleText} />
+          </TouchableOpacity>
+        </View>
+        <ScrollView contentContainerStyle={styles.detailScrollContainer}>
+          <View style={styles.detailTagsContainer}>
+            {detailItems.map((item, index) => (
+              <View key={index} style={styles.detailTag}>
+                <Text style={styles.detailTagLabel}>{item.label}:</Text>
+                <Text style={styles.detailTagValue}>{item.value}</Text>
+              </View>
+            ))}
+          </View>
+
+          <View style={styles.detailSection}>
+            <Text style={styles.detailSectionTitle}>Primary Muscles</Text>
+            <Text style={styles.detailText}>
+              {exercise.primaryMuscles.join(", ")}
+            </Text>
+          </View>
+
+          {exercise.secondaryMuscles.length > 0 && (
+            <View style={styles.detailSection}>
+              <Text style={styles.detailSectionTitle}>Secondary Muscles</Text>
+              <Text style={styles.detailText}>
+                {exercise.secondaryMuscles.join(", ")}
+              </Text>
+            </View>
+          )}
+
+          <View style={styles.detailSection}>
+            <Text style={styles.detailSectionTitle}>Instructions</Text>
+            {exercise.instructions.map((step, index) => (
+              <View key={index} style={styles.instructionStep}>
+                <Text style={styles.instructionNumber}>{index + 1}.</Text>
+                <Text style={styles.instructionText}>{step}</Text>
+              </View>
+            ))}
+          </View>
+        </ScrollView>
+      </SafeAreaView>
+    </Modal>
+  );
+};
+
 // =================================================================================================
 // --- MAIN SCREEN ---
 // =================================================================================================
@@ -552,6 +710,9 @@ export default function WorkoutSessionScreen() {
   const [recentWorkouts, setRecentWorkouts] = useState<WorkoutHistory[]>([]);
   const [activePlan, setActivePlan] = useState<WorkoutPlan | null>(null);
   const [isPlanSelectorVisible, setIsPlanSelectorVisible] = useState(false);
+  const [previewPlan, setPreviewPlan] = useState<WorkoutPlan | null>(null);
+  const [isPreviewModalVisible, setIsPreviewModalVisible] = useState(false);
+  const [viewingExercise, setViewingExercise] = useState<Exercise | null>(null);
 
   const fetchWorkoutPlans = useCallback(async () => {
     if (!user) return;
@@ -641,12 +802,22 @@ export default function WorkoutSessionScreen() {
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
     setActivePlan(plan);
     setIsPlanSelectorVisible(false);
+    setIsPreviewModalVisible(false);
   };
 
-  const handleStartFromHistory = (historyItem: WorkoutHistory) => {
-    const planToStart = allPlans.find((plan) => plan.id === historyItem.planId);
-    if (planToStart) {
-      handleStartPlan(planToStart);
+  const handleSelectPlanForPreview = (plan: WorkoutPlan) => {
+    setPreviewPlan(plan);
+    setIsPlanSelectorVisible(false);
+    setIsPreviewModalVisible(true);
+  };
+
+  const handlePreviewFromHistory = (historyItem: WorkoutHistory) => {
+    const planToPreview = allPlans.find(
+      (plan) => plan.id === historyItem.planId
+    );
+    if (planToPreview) {
+      setPreviewPlan(planToPreview);
+      setIsPreviewModalVisible(true);
     } else {
       Alert.alert(
         "Plan Not Found",
@@ -728,6 +899,21 @@ export default function WorkoutSessionScreen() {
     setActivePlan(null);
   };
 
+  const handleViewExerciseDetails = (workout: Workout) => {
+    const exerciseDetails = (exercises as Exercise[]).find(
+      (ex) => ex.name.toLowerCase() === workout.name.trim().toLowerCase()
+    );
+
+    if (exerciseDetails) {
+      setViewingExercise(exerciseDetails);
+    } else {
+      Alert.alert(
+        "Exercise Not Found",
+        `"${workout.name}" is not in the exercise library. This might be a custom exercise.`
+      );
+    }
+  };
+
   if (isLoading) {
     return (
       <View
@@ -748,14 +934,18 @@ export default function WorkoutSessionScreen() {
       {activePlan ? (
         <>
           <Header title={activePlan.planName} />
-          <ActiveWorkoutView plan={activePlan} onFinish={handleFinishWorkout} />
+          <ActiveWorkoutView
+            plan={activePlan}
+            onFinish={handleFinishWorkout}
+            onViewExerciseDetails={handleViewExerciseDetails}
+          />
         </>
       ) : (
         <StartWorkoutView
           onChoosePlan={() => setIsPlanSelectorVisible(true)}
           onQuickStart={handleQuickStart}
           recentWorkouts={recentWorkouts}
-          onStartFromHistory={handleStartFromHistory}
+          onPreviewFromHistory={handlePreviewFromHistory}
           onClearHistory={handleClearHistory}
         />
       )}
@@ -763,7 +953,18 @@ export default function WorkoutSessionScreen() {
         visible={isPlanSelectorVisible}
         onClose={() => setIsPlanSelectorVisible(false)}
         plans={allPlans}
-        onSelectPlan={handleStartPlan}
+        onSelectPlan={handleSelectPlanForPreview}
+      />
+      <WorkoutPlanPreviewModal
+        visible={isPreviewModalVisible}
+        onClose={() => setIsPreviewModalVisible(false)}
+        plan={previewPlan}
+        onStart={handleStartPlan}
+      />
+      <ExerciseDetailModal
+        visible={!!viewingExercise}
+        onClose={() => setViewingExercise(null)}
+        exercise={viewingExercise}
       />
     </SafeAreaView>
   );
@@ -954,19 +1155,23 @@ const getStyles = (scheme: "light" | "dark") => {
     activeWorkoutContainer: {
       flex: 1,
     },
+    activeWorkoutScrollView: {
+      paddingBottom: 220, // Ensures content doesn't hide behind footer
+    },
     timerContainer: {
-      alignItems: "center",
+      alignItems: "flex-end",
       paddingVertical: 10,
+      paddingHorizontal: 20,
     },
     timerLabel: {
       fontSize: 14,
       fontWeight: "600",
       color: colors.subtleText,
       letterSpacing: 1.5,
-      marginBottom: 5,
+      marginBottom: 2,
     },
     timerText: {
-      fontSize: 60,
+      fontSize: 40,
       fontWeight: "bold",
       color: colors.text,
       fontVariant: ["tabular-nums"],
@@ -1001,7 +1206,6 @@ const getStyles = (scheme: "light" | "dark") => {
       fontSize: 20,
       fontWeight: "bold",
       color: colors.text,
-      flex: 1,
     },
     exerciseDetails: {
       fontSize: 14,
@@ -1212,6 +1416,72 @@ const getStyles = (scheme: "light" | "dark") => {
       fontSize: 18,
       fontWeight: "bold",
       color: "#FFFFFF",
+    },
+    // Exercise Detail Modal
+    detailModalContainer: {
+      flex: 1,
+      backgroundColor: colors.background,
+    },
+    detailScrollContainer: {
+      padding: 20,
+    },
+    detailSection: {
+      marginBottom: 24,
+    },
+    detailSectionTitle: {
+      fontSize: 20,
+      fontWeight: "bold",
+      color: colors.text,
+      marginBottom: 8,
+      textTransform: "capitalize",
+    },
+    detailText: {
+      fontSize: 16,
+      color: colors.text,
+      lineHeight: 24,
+      textTransform: "capitalize",
+    },
+    instructionStep: {
+      flexDirection: "row",
+      marginBottom: 12,
+    },
+    instructionNumber: {
+      fontSize: 16,
+      lineHeight: 24,
+      color: colors.subtleText,
+      marginRight: 8,
+      fontWeight: "bold",
+    },
+    instructionText: {
+      flex: 1,
+      fontSize: 16,
+      lineHeight: 24,
+      color: colors.text,
+    },
+    detailTagsContainer: {
+      flexDirection: "row",
+      flexWrap: "wrap",
+      gap: 10,
+      marginBottom: 24,
+    },
+    detailTag: {
+      backgroundColor: colors.card,
+      paddingVertical: 6,
+      paddingHorizontal: 12,
+      borderRadius: 8,
+      flexDirection: "row",
+      alignItems: "center",
+    },
+    detailTagLabel: {
+      fontSize: 14,
+      color: colors.subtleText,
+      marginRight: 6,
+    },
+    detailTagValue: {
+      fontSize: 14,
+      color: colors.text,
+      fontWeight: "600",
+      textTransform: "capitalize",
     },
   });
 };
