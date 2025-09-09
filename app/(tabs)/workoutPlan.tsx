@@ -1,3 +1,55 @@
+/**
+ * @file workoutPlan.tsx
+ * @description This file contains the WorkoutPlanScreen, which allows users to create, view, edit, reorder, and delete their workout plans.
+ *
+ * --- COMPONENT & MODAL OVERVIEW ---
+ *
+ * 1.  WorkoutPlanScreen (Main Component):
+ * - Manages the state for all workout plans.
+ * - Fetches plans from Firebase and handles loading states.
+ * - Toggles between a plan carousel view and a drag-and-drop reordering view.
+ *
+ * 2.  PlanCard:
+ * - A large, visually appealing card that displays a summary of a single workout plan in the main carousel view.
+ *
+ * 3.  PlanModal:
+ * - A full-screen modal for creating a new workout plan or editing an existing one.
+ * - Contains fields for plan name, description, and schedule (days of the week).
+ * - Manages a list of exercises within the plan, allowing users to add, delete, and reorder them using a `DraggableFlatList`.
+ *
+ * 4.  ExercisePickerModal:
+ * - Opens from the `PlanModal` when the user wants to add exercises from the library.
+ * - Features a comprehensive, filterable list of all exercises from `exercises.json`.
+ * - Allows for multi-selection of exercises to add to the plan.
+ *
+ * 5.  ExerciseExplorerModal:
+ * - A read-only version of the exercise library, accessible from the main screen.
+ * - Allows users to browse and search for exercises without the context of adding them to a plan.
+ *
+ * 6.  ExerciseDetailModal:
+ * - Displays detailed information about a single exercise (muscles, instructions, etc.).
+ * - Can be triggered from `ExercisePickerModal` or `ExerciseExplorerModal`.
+ *
+ * 7.  MuscleSelectionModal:
+ * - A small modal that opens from within the `PlanModal` when a user adds a custom (blank) exercise.
+ * - Allows the user to assign primary muscle groups to their custom exercise.
+ *
+ * 8.  ExerciseFilter & FilterSelectionModal:
+ * - Reusable components that build the advanced filtering UI within the `ExercisePickerModal` and `ExerciseExplorerModal`.
+ *
+ * --- FIREBASE INTEGRATION ---
+ *
+ * This screen interacts with one main Firestore collection under the user's UID (`/users/{uid}/`):
+ *
+ * 1.  `workoutPlans` collection:
+ * - `fetchWorkoutPlans`: Reads all documents from this collection to display on the main screen. Documents are sorted by an `order` field.
+ * - `handleSavePlan`:
+ * - If editing, it uses `updateDoc` to save changes to an existing plan document.
+ * - If creating, it uses `addDoc` to create a new plan document. It also calculates and assigns the correct `order` number.
+ * - `handleDeletePlan`: Uses `deleteDoc` to remove a specific plan document from the collection.
+ * - `handleDoneReordering`: Uses a `writeBatch` operation to efficiently update the `order` field of all plan documents after the user has finished reordering them in the UI. This ensures the new order is persisted.
+ */
+
 import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import {
@@ -1355,6 +1407,7 @@ export default function WorkoutPlanScreen() {
   const { user } = useAuth();
   const colorScheme = useColorScheme() ?? "light";
   const styles = getStyles(colorScheme);
+  const colors = Colors[colorScheme];
 
   const [isLoading, setIsLoading] = useState(true);
   const [savedPlans, setSavedPlans] = useState<WorkoutPlan[]>([]);
@@ -1586,7 +1639,18 @@ export default function WorkoutPlanScreen() {
   };
 
   if (isLoading) {
-    return <ActivityIndicator style={{ flex: 1 }} size="large" />;
+    return (
+      <View
+        style={{
+          flex: 1,
+          justifyContent: "center",
+          alignItems: "center",
+          backgroundColor: colors.background,
+        }}
+      >
+        <ActivityIndicator size="large" color={colors.primary} />
+      </View>
+    );
   }
 
   return (
