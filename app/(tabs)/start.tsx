@@ -424,6 +424,7 @@ const ActiveWorkoutView = ({
   return (
     <View style={styles.activeWorkoutContainer}>
       <ScrollView contentContainerStyle={styles.activeWorkoutScrollView}>
+        <Header title={plan.planName} />
         <View style={styles.timerContainer}>
           <View>
             <Text style={styles.timerLabel}>
@@ -493,17 +494,17 @@ const ActiveWorkoutView = ({
               )}
           </View>
         ))}
-      </ScrollView>
 
-      <View style={styles.footer}>
-        <MusicPlayerCard />
-        <TouchableOpacity
-          style={styles.finishButton}
-          onPress={handleFinishWorkout}
-        >
-          <Text style={styles.finishButtonText}>Finish Workout</Text>
-        </TouchableOpacity>
-      </View>
+        <View style={styles.footer}>
+          <MusicPlayerCard />
+          <TouchableOpacity
+            style={styles.finishButton}
+            onPress={handleFinishWorkout}
+          >
+            <Text style={styles.finishButtonText}>Finish Workout</Text>
+          </TouchableOpacity>
+        </View>
+      </ScrollView>
     </View>
   );
 };
@@ -932,14 +933,11 @@ export default function WorkoutSessionScreen() {
   return (
     <SafeAreaView style={styles.container}>
       {activePlan ? (
-        <>
-          <Header title={activePlan.planName} />
-          <ActiveWorkoutView
-            plan={activePlan}
-            onFinish={handleFinishWorkout}
-            onViewExerciseDetails={handleViewExerciseDetails}
-          />
-        </>
+        <ActiveWorkoutView
+          plan={activePlan}
+          onFinish={handleFinishWorkout}
+          onViewExerciseDetails={handleViewExerciseDetails}
+        />
       ) : (
         <StartWorkoutView
           onChoosePlan={() => setIsPlanSelectorVisible(true)}
@@ -1156,7 +1154,7 @@ const getStyles = (scheme: "light" | "dark") => {
       flex: 1,
     },
     activeWorkoutScrollView: {
-      paddingBottom: 220, // Ensures content doesn't hide behind footer
+      paddingBottom: 60,
     },
     timerContainer: {
       alignItems: "flex-end",
@@ -1254,15 +1252,9 @@ const getStyles = (scheme: "light" | "dark") => {
     },
     // Footer
     footer: {
-      position: "absolute",
-      bottom: 0,
-      left: 0,
-      right: 0,
-      padding: 20,
-      paddingBottom: 30,
-      backgroundColor: colors.background,
-      borderTopWidth: 1,
-      borderTopColor: colors.border,
+      paddingHorizontal: 20,
+      paddingTop: 20,
+      marginTop: 15,
     },
     musicCard: {
       backgroundColor: colors.card,
