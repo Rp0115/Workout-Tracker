@@ -324,7 +324,7 @@ const StartWorkoutView = ({
           </>
         ) : (
           <View style={styles.historyEmpty}>
-            <Text style={styles.historyEmptyText}>No recent workouts.</Text>
+            <Text style={styles.historyEmptyText}>No recent workouts</Text>
           </View>
         )}
       </View>
@@ -536,6 +536,76 @@ const WorkoutPlanSelectionModal = ({
   );
 };
 
+const WorkoutPreviewModal = ({
+  visible,
+  plan,
+  onClose,
+  onStart,
+}: {
+  visible: boolean;
+  plan: WorkoutPlan | null;
+  onClose: () => void;
+  onStart: (plan: WorkoutPlan) => void;
+}) => {
+  const styles = getStyles(useColorScheme() ?? "light");
+  const colors = Colors[useColorScheme() ?? "light"];
+
+  if (!plan) {
+    return null;
+  }
+
+  return (
+    <Modal
+      animationType="fade"
+      transparent={true}
+      visible={visible}
+      onRequestClose={onClose}
+    >
+      <View style={styles.previewModalOverlay}>
+        <SafeAreaView style={styles.previewModalContainer}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle} numberOfLines={2}>
+              {plan.planName}
+            </Text>
+            <TouchableOpacity onPress={onClose}>
+              <Feather name="x-circle" size={26} color={colors.subtleText} />
+            </TouchableOpacity>
+          </View>
+
+          <FlatList
+            data={plan.workouts}
+            keyExtractor={(item, index) => `${item.name}-${index}`}
+            contentContainerStyle={styles.previewListContent}
+            renderItem={({ item, index }) => (
+              <View style={styles.previewExerciseCard}>
+                <Text style={styles.previewExerciseNumber}>{index + 1}</Text>
+                <View style={styles.previewExerciseInfo}>
+                  <Text style={styles.previewExerciseName}>{item.name}</Text>
+                  <Text style={styles.previewExerciseDetails}>
+                    {item.sets} sets x {item.reps} reps
+                  </Text>
+                </View>
+              </View>
+            )}
+            ItemSeparatorComponent={() => (
+              <View style={styles.previewSeparator} />
+            )}
+          />
+
+          <View style={styles.previewFooter}>
+            <TouchableOpacity
+              style={styles.previewStartButton}
+              onPress={() => onStart(plan)}
+            >
+              <Text style={styles.previewStartButtonText}>Start Workout</Text>
+            </TouchableOpacity>
+          </View>
+        </SafeAreaView>
+      </View>
+    </Modal>
+  );
+};
+
 // =================================================================================================
 // --- MAIN SCREEN ---
 // =================================================================================================
@@ -550,6 +620,12 @@ export default function WorkoutSessionScreen() {
   const [recentWorkouts, setRecentWorkouts] = useState<WorkoutHistory[]>([]);
   const [activePlan, setActivePlan] = useState<WorkoutPlan | null>(null);
   const [isPlanSelectorVisible, setIsPlanSelectorVisible] = useState(false);
+  const [previewingPlan, setPreviewingPlan] = useState<WorkoutPlan | null>(
+    null
+  );
+  const [previewSource, setPreviewSource] = useState<
+    "history" | "selection" | null
+  >(null);
 
   const fetchWorkoutPlans = useCallback(async () => {
     if (!user) return;
@@ -567,6 +643,10 @@ export default function WorkoutSessionScreen() {
       setAllPlans(plans);
     } catch (error) {
       console.error("Error fetching workout plans: ", error);
+      Alert.alert(
+        "Loading Error",
+        "Could not load your workout plans. Please check your connection and try again."
+      );
     }
   }, [user]);
 
@@ -578,7 +658,6 @@ export default function WorkoutSessionScreen() {
       user.uid,
       "workoutHistory"
     );
-    // Fetch more to find unique plans
     const q = query(
       historyCollectionRef,
       orderBy("completedAt", "desc"),
@@ -590,7 +669,6 @@ export default function WorkoutSessionScreen() {
         (doc) => ({ id: doc.id, ...doc.data() } as WorkoutHistory)
       );
 
-      // Filter for unique plans, keeping the most recent one
       const uniqueWorkouts: WorkoutHistory[] = [];
       const seenPlanIds = new Set<string>();
       for (const workout of history) {
@@ -599,12 +677,24 @@ export default function WorkoutSessionScreen() {
           seenPlanIds.add(workout.planId);
         }
         if (uniqueWorkouts.length >= 4) {
-          break; // Stop when we have 4 unique workouts
+          break;
         }
       }
       setRecentWorkouts(uniqueWorkouts);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error fetching workout history: ", error);
+      let errorMessage =
+        "Could not load your workout history. Please check your connection and try again.";
+      // Check for the specific Firestore index error message
+      if (
+        error.message &&
+        (error.message.includes("firestore/failed-precondition") ||
+          error.message.includes("requires an index"))
+      ) {
+        errorMessage =
+          "A database index is required for this feature. Please check the developer console for a link to create it.";
+      }
+      Alert.alert("Loading Error", errorMessage);
     }
   }, [user]);
 
@@ -624,13 +714,22 @@ export default function WorkoutSessionScreen() {
   const handleStartPlan = (plan: WorkoutPlan) => {
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
     setActivePlan(plan);
+    setPreviewingPlan(null);
     setIsPlanSelectorVisible(false);
+    setPreviewSource(null);
+  };
+
+  const handleOpenPreview = (plan: WorkoutPlan) => {
+    setIsPlanSelectorVisible(false);
+    setPreviewSource("selection");
+    setPreviewingPlan(plan);
   };
 
   const handleStartFromHistory = (historyItem: WorkoutHistory) => {
     const planToStart = allPlans.find((plan) => plan.id === historyItem.planId);
     if (planToStart) {
-      handleStartPlan(planToStart);
+      setPreviewSource("history");
+      setPreviewingPlan(planToStart);
     } else {
       Alert.alert(
         "Plan Not Found",
@@ -671,7 +770,7 @@ export default function WorkoutSessionScreen() {
                 batch.delete(doc.ref);
               });
               await batch.commit();
-              setRecentWorkouts([]); // Clear state immediately
+              setRecentWorkouts([]);
             } catch (error) {
               console.error("Error clearing history:", error);
               Alert.alert(
@@ -747,7 +846,20 @@ export default function WorkoutSessionScreen() {
         visible={isPlanSelectorVisible}
         onClose={() => setIsPlanSelectorVisible(false)}
         plans={allPlans}
-        onSelectPlan={handleStartPlan}
+        onSelectPlan={handleOpenPreview}
+      />
+      <WorkoutPreviewModal
+        visible={!!previewingPlan}
+        plan={previewingPlan}
+        onClose={() => {
+          const source = previewSource;
+          setPreviewingPlan(null);
+          setPreviewSource(null);
+          if (source === "selection") {
+            setIsPlanSelectorVisible(true);
+          }
+        }}
+        onStart={handleStartPlan}
       />
     </SafeAreaView>
   );
@@ -779,7 +891,6 @@ const getStyles = (scheme: "light" | "dark") => {
     startViewContainer: {
       flexGrow: 1,
       paddingHorizontal: 20,
-      marginBottom: 50,
     },
     mainContent: {
       flex: 1,
@@ -874,7 +985,7 @@ const getStyles = (scheme: "light" | "dark") => {
     // History Section
     historySection: {
       width: "100%",
-      paddingBottom: 40,
+      paddingBottom: 80,
     },
     historyTitle: {
       fontSize: 22,
@@ -928,7 +1039,6 @@ const getStyles = (scheme: "light" | "dark") => {
       paddingVertical: 4,
       paddingHorizontal: 8,
       alignSelf: "center",
-      marginBottom: 30,
     },
     clearHistoryButtonText: {
       color: colors.subtleText,
@@ -1120,11 +1230,83 @@ const getStyles = (scheme: "light" | "dark") => {
       fontSize: 22,
       fontWeight: "bold",
       color: colors.text,
+      flex: 1,
     },
     modalListContent: {
       paddingHorizontal: 20,
       paddingTop: 20,
       paddingBottom: 40,
+    },
+    // Preview Modal Styles
+    previewModalOverlay: {
+      flex: 1,
+      backgroundColor: "rgba(0, 0, 0, 0.6)",
+      justifyContent: "center",
+      alignItems: "center",
+    },
+    previewModalContainer: {
+      backgroundColor: colors.background,
+      borderRadius: 24,
+      width: "90%",
+      maxHeight: "70%",
+      shadowColor: "#000",
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.25,
+      shadowRadius: 4,
+      elevation: 5,
+    },
+    previewListContent: {
+      paddingHorizontal: 20,
+      paddingVertical: 15,
+    },
+    previewExerciseCard: {
+      flexDirection: "row",
+      alignItems: "center",
+      paddingVertical: 15,
+    },
+    previewExerciseNumber: {
+      fontSize: 16,
+      fontWeight: "bold",
+      color: colors.subtleText,
+      width: 30,
+    },
+    previewExerciseInfo: {
+      flex: 1,
+    },
+    previewExerciseName: {
+      fontSize: 18,
+      fontWeight: "600",
+      color: colors.text,
+    },
+    previewExerciseDetails: {
+      fontSize: 15,
+      color: colors.subtleText,
+      marginTop: 4,
+    },
+    previewSeparator: {
+      height: 1,
+      backgroundColor: colors.border,
+      marginLeft: 30,
+    },
+    previewFooter: {
+      padding: 20,
+      paddingBottom: 20,
+      borderTopWidth: 1,
+      borderTopColor: colors.border,
+      backgroundColor: colors.background,
+      borderBottomLeftRadius: 24,
+      borderBottomRightRadius: 24,
+    },
+    previewStartButton: {
+      backgroundColor: colors.primary,
+      padding: 16,
+      borderRadius: 16,
+      alignItems: "center",
+    },
+    previewStartButtonText: {
+      fontSize: 18,
+      fontWeight: "bold",
+      color: "#FFFFFF",
     },
   });
 };
