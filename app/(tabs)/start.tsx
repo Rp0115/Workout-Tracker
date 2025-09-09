@@ -324,7 +324,9 @@ const StartWorkoutView = ({
           </>
         ) : (
           <View style={styles.historyEmpty}>
-            <Text style={styles.historyEmptyText}>No recent workouts</Text>
+            <Text style={styles.historyEmptyText}>
+              No recent workouts. Finish a session to see it here!
+            </Text>
           </View>
         )}
       </View>
@@ -536,76 +538,6 @@ const WorkoutPlanSelectionModal = ({
   );
 };
 
-const WorkoutPreviewModal = ({
-  visible,
-  plan,
-  onClose,
-  onStart,
-}: {
-  visible: boolean;
-  plan: WorkoutPlan | null;
-  onClose: () => void;
-  onStart: (plan: WorkoutPlan) => void;
-}) => {
-  const styles = getStyles(useColorScheme() ?? "light");
-  const colors = Colors[useColorScheme() ?? "light"];
-
-  if (!plan) {
-    return null;
-  }
-
-  return (
-    <Modal
-      animationType="fade"
-      transparent={true}
-      visible={visible}
-      onRequestClose={onClose}
-    >
-      <View style={styles.previewModalOverlay}>
-        <SafeAreaView style={styles.previewModalContainer}>
-          <View style={styles.modalHeader}>
-            <Text style={styles.modalTitle} numberOfLines={2}>
-              {plan.planName}
-            </Text>
-            <TouchableOpacity onPress={onClose}>
-              <Feather name="x-circle" size={26} color={colors.subtleText} />
-            </TouchableOpacity>
-          </View>
-
-          <FlatList
-            data={plan.workouts}
-            keyExtractor={(item, index) => `${item.name}-${index}`}
-            contentContainerStyle={styles.previewListContent}
-            renderItem={({ item, index }) => (
-              <View style={styles.previewExerciseCard}>
-                <Text style={styles.previewExerciseNumber}>{index + 1}</Text>
-                <View style={styles.previewExerciseInfo}>
-                  <Text style={styles.previewExerciseName}>{item.name}</Text>
-                  <Text style={styles.previewExerciseDetails}>
-                    {item.sets} sets x {item.reps} reps
-                  </Text>
-                </View>
-              </View>
-            )}
-            ItemSeparatorComponent={() => (
-              <View style={styles.previewSeparator} />
-            )}
-          />
-
-          <View style={styles.previewFooter}>
-            <TouchableOpacity
-              style={styles.previewStartButton}
-              onPress={() => onStart(plan)}
-            >
-              <Text style={styles.previewStartButtonText}>Start Workout</Text>
-            </TouchableOpacity>
-          </View>
-        </SafeAreaView>
-      </View>
-    </Modal>
-  );
-};
-
 // =================================================================================================
 // --- MAIN SCREEN ---
 // =================================================================================================
@@ -620,12 +552,6 @@ export default function WorkoutSessionScreen() {
   const [recentWorkouts, setRecentWorkouts] = useState<WorkoutHistory[]>([]);
   const [activePlan, setActivePlan] = useState<WorkoutPlan | null>(null);
   const [isPlanSelectorVisible, setIsPlanSelectorVisible] = useState(false);
-  const [previewingPlan, setPreviewingPlan] = useState<WorkoutPlan | null>(
-    null
-  );
-  const [previewSource, setPreviewSource] = useState<
-    "history" | "selection" | null
-  >(null);
 
   const fetchWorkoutPlans = useCallback(async () => {
     if (!user) return;
@@ -714,22 +640,13 @@ export default function WorkoutSessionScreen() {
   const handleStartPlan = (plan: WorkoutPlan) => {
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
     setActivePlan(plan);
-    setPreviewingPlan(null);
     setIsPlanSelectorVisible(false);
-    setPreviewSource(null);
-  };
-
-  const handleOpenPreview = (plan: WorkoutPlan) => {
-    setIsPlanSelectorVisible(false);
-    setPreviewSource("selection");
-    setPreviewingPlan(plan);
   };
 
   const handleStartFromHistory = (historyItem: WorkoutHistory) => {
     const planToStart = allPlans.find((plan) => plan.id === historyItem.planId);
     if (planToStart) {
-      setPreviewSource("history");
-      setPreviewingPlan(planToStart);
+      handleStartPlan(planToStart);
     } else {
       Alert.alert(
         "Plan Not Found",
@@ -846,20 +763,7 @@ export default function WorkoutSessionScreen() {
         visible={isPlanSelectorVisible}
         onClose={() => setIsPlanSelectorVisible(false)}
         plans={allPlans}
-        onSelectPlan={handleOpenPreview}
-      />
-      <WorkoutPreviewModal
-        visible={!!previewingPlan}
-        plan={previewingPlan}
-        onClose={() => {
-          const source = previewSource;
-          setPreviewingPlan(null);
-          setPreviewSource(null);
-          if (source === "selection") {
-            setIsPlanSelectorVisible(true);
-          }
-        }}
-        onStart={handleStartPlan}
+        onSelectPlan={handleStartPlan}
       />
     </SafeAreaView>
   );
@@ -985,7 +889,7 @@ const getStyles = (scheme: "light" | "dark") => {
     // History Section
     historySection: {
       width: "100%",
-      paddingBottom: 80,
+      paddingBottom: 40,
     },
     historyTitle: {
       fontSize: 22,
@@ -1039,6 +943,7 @@ const getStyles = (scheme: "light" | "dark") => {
       paddingVertical: 4,
       paddingHorizontal: 8,
       alignSelf: "center",
+      marginBottom: 30,
     },
     clearHistoryButtonText: {
       color: colors.subtleText,
