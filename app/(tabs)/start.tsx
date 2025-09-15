@@ -27,41 +27,34 @@
  * 5.  WorkoutPlanPreviewModal:
  * - Shows a summary of a selected workout plan's exercises before starting.
  *
- * 6.  ExerciseDetailModal:
+ * 6.  ExerciseLibraryModal (Unified Component):
+ * - A single, reusable modal for browsing and selecting exercises from the library.
+ * - Operates in `mode='pick'` to add exercises to an active workout.
+ *
+ * 7.  ExerciseDetailModal:
  * - Displays detailed information about a single exercise (muscles, instructions, etc.).
- * - Triggered from the info icon in `ActiveWorkoutView` or `ExercisePickerModal`.
- *
- * 7.  ExercisePickerModal:
- * - A full-featured modal for adding new exercises to an active workout.
- * - Includes a search bar and advanced filtering capabilities (`ExerciseFilter`).
- *
- * 8.  ExerciseFilter & FilterSelectionModal:
- * - Reusable components within the `ExercisePickerModal` that allow users to filter the exercise list by muscle group, equipment, and difficulty.
+ * - Triggered from the info icon in `ActiveWorkoutView` or `ExerciseLibraryModal`.
  *
  * --- FIREBASE INTEGRATION ---
  *
- * This screen interacts with two main Firestore collections under the user's UID (`/users/{uid}/`):
+ * This screen interacts with three main Firestore collections under the user's UID (`/users/{uid}/`):
  *
  * 1.  `workoutPlans` collection:
  * - `fetchWorkoutPlans`: Reads all documents from this collection to display in the `WorkoutPlanSelectionModal`.
  * - `handleUpdateAndFinish`: Updates a specific plan document if the user chooses to save modifications made during a workout session.
  *
  * 2.  `workoutHistory` collection:
- * - `fetchRecentWorkouts`: Reads the last 20 documents, ordered by `completedAt`, to display in the `StartWorkoutView`.
- * - `finishWorkout`: Creates a new document in this collection when a workout is completed. The saved document contains a detailed log of the session:
- * - planId, planName, icon (string)
- * - completedAt (Timestamp)
- * - duration (number, in seconds)
- * - exercises (array of objects):
- * - name (string)
- * - sets (array of objects):
- * - reps (string)
- * - weight (string)
- * - `handleClearHistory`: Deletes all documents in the collection using a `writeBatch` operation.
+ * - `fetchRecentWorkouts`: Reads the last 20 documents from the user's regular workout history.
+ * - `finishWorkout`: Creates a new document in this collection when a workout from a plan is completed.
+ *
+ * 3.  `workoutQuickHistory` collection:
+ * - `fetchRecentWorkouts`: Also reads the last 20 documents from the user's quick workout history.
+ * - `finishWorkout`: Creates a new document here when a "Quick Start" session is completed, naming it "Quick Workout #[n]".
  */
 
 import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
+import { useRouter } from "expo-router";
 import {
   Timestamp,
   addDoc,
@@ -97,7 +90,10 @@ import {
   View,
   useColorScheme,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import {
+  SafeAreaView,
+  useSafeAreaInsets,
+} from "react-native-safe-area-context";
 
 import { useAuth } from "../../context/AuthContext";
 import exercises from "../../exercises.json"; // Import exercise data
@@ -135,6 +131,7 @@ interface Workout {
   name: string;
   sets: number;
   reps: string;
+  primaryMuscles?: string[];
 }
 
 interface WorkoutPlan {
@@ -154,6 +151,7 @@ interface WorkoutHistory {
   planName: string;
   icon?: string;
   completedAt: Timestamp;
+  exercises?: { name: string; sets: { reps: string; weight: string }[] }[];
 }
 
 // --- NEW TYPES FOR ACTIVE WORKOUT ---
@@ -225,7 +223,7 @@ const useTimer = (initialSeconds = 0) => {
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
     };
-  }, [isActive]);
+  }, [isActive, time]); // Syncing behavior with useCountdown
 
   const formatTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60)
@@ -254,7 +252,14 @@ const useCountdown = (initialSeconds: number, onComplete: () => void) => {
     setTime(seconds || initialSeconds);
     setIsActive(true);
   };
-  const pause = () => setIsActive(false);
+
+  const stop = () => {
+    setIsActive(false);
+    setTime(initialSeconds);
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current);
+    }
+  };
 
   useEffect(() => {
     if (isActive && time > 0) {
@@ -270,28 +275,39 @@ const useCountdown = (initialSeconds: number, onComplete: () => void) => {
     };
   }, [isActive, time, onComplete]);
 
-  return { time, start, pause, isActive };
+  return { time, start, stop, isActive };
 };
 
 const formatDate = (timestamp: Timestamp) => {
   if (!timestamp) return "";
-  const date = timestamp.toDate();
+  const workoutDate = timestamp.toDate();
   const now = new Date();
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const yesterday = new Date(today);
-  yesterday.setDate(yesterday.getDate() - 1);
 
-  if (date >= today) return "Today";
-  if (date >= yesterday) return "Yesterday";
+  // Reset hours, minutes, seconds, and milliseconds to compare dates only
+  const startOfWorkoutDate = new Date(
+    workoutDate.getFullYear(),
+    workoutDate.getMonth(),
+    workoutDate.getDate()
+  );
+  const startOfNow = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 
-  return date.toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-  });
+  const diffTime = startOfNow.getTime() - startOfWorkoutDate.getTime();
+  const diffDays = Math.round(diffTime / (1000 * 60 * 60 * 24));
+
+  if (diffDays === 0) return "Today";
+  if (diffDays === 1) return "Yesterday";
+  if (diffDays > 1 && diffDays <= 6) return `${diffDays} days ago`;
+  if (diffDays === 7) return "Last week";
+
+  // Format as MM/DD/YYYY for dates older than a week
+  const month = (workoutDate.getMonth() + 1).toString().padStart(2, "0");
+  const day = workoutDate.getDate().toString().padStart(2, "0");
+  const year = workoutDate.getFullYear();
+  return `${month}/${day}/${year}`;
 };
 
 // =================================================================================================
-// --- UI COMPONENTS ---
+// --- REUSABLE UI COMPONENTS ---
 // =================================================================================================
 const Header = ({ title }: { title: string }) => {
   const styles = getStyles(useColorScheme() ?? "light");
@@ -340,10 +356,6 @@ const HistoryCard = ({
   );
 };
 
-// =================================================================================================
-// --- SCREEN VIEWS ---
-// =================================================================================================
-
 const SelectablePlanCard = ({
   plan,
   onPress,
@@ -372,649 +384,6 @@ const SelectablePlanCard = ({
   );
 };
 
-const StartWorkoutView = ({
-  onChoosePlan,
-  onQuickStart,
-  recentWorkouts,
-  onPreviewFromHistory,
-  onClearHistory,
-  refreshing,
-  onRefresh,
-}: {
-  onChoosePlan: () => void;
-  onQuickStart: () => void;
-  recentWorkouts: WorkoutHistory[];
-  onPreviewFromHistory: (historyItem: WorkoutHistory) => void;
-  onClearHistory: () => void;
-  refreshing: boolean;
-  onRefresh: () => void;
-}) => {
-  const styles = getStyles(useColorScheme() ?? "light");
-  const colors = Colors[useColorScheme() ?? "light"];
-  return (
-    <ScrollView
-      contentContainerStyle={styles.startViewContainer}
-      refreshControl={
-        <RefreshControl
-          refreshing={refreshing}
-          onRefresh={onRefresh}
-          tintColor={colors.primary}
-        />
-      }
-    >
-      <View style={styles.mainContent}>
-        <Text style={styles.pageTitle}>Start Session</Text>
-        <Text style={styles.startViewSubtitle}>
-          Select a workout plan to begin your training.
-        </Text>
-        <TouchableOpacity style={styles.primaryButton} onPress={onChoosePlan}>
-          <Feather name="list" size={20} color="#FFFFFF" />
-          <Text style={styles.primaryButtonText}>Choose Workout Plan</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.secondaryButton, { marginTop: 15 }]}
-          onPress={onQuickStart}
-        >
-          <Feather name="plus-circle" size={20} color={colors.primary} />
-          <Text style={styles.secondaryButtonText}>
-            Quick Start Empty Session
-          </Text>
-        </TouchableOpacity>
-      </View>
-
-      <View style={styles.historySection}>
-        <Text style={styles.historyTitle}>Get back into it</Text>
-        {recentWorkouts.length > 0 ? (
-          <>
-            <FlatList
-              data={recentWorkouts}
-              keyExtractor={(item) => item.id}
-              numColumns={2}
-              scrollEnabled={false}
-              columnWrapperStyle={{ justifyContent: "space-between" }}
-              renderItem={({ item }) => (
-                <HistoryCard
-                  item={item}
-                  onPress={() => onPreviewFromHistory(item)}
-                />
-              )}
-            />
-            <TouchableOpacity
-              style={styles.clearHistoryButton}
-              onPress={onClearHistory}
-            >
-              <Text style={styles.clearHistoryButtonText}>Clear History</Text>
-            </TouchableOpacity>
-          </>
-        ) : (
-          <View style={styles.historyEmpty}>
-            <Text style={styles.historyEmptyText}>
-              No recent workouts. Finish a session to see it here!
-            </Text>
-          </View>
-        )}
-      </View>
-    </ScrollView>
-  );
-};
-
-const ActiveWorkoutView = ({
-  plan,
-  onFinish,
-  onViewExerciseDetails,
-  onUpdateAndFinish,
-  exerciseData,
-}: {
-  plan: WorkoutPlan;
-  onFinish: (
-    plan: WorkoutPlan,
-    sessionData: ActiveExercise[],
-    duration: number
-  ) => void;
-  onViewExerciseDetails: (exercise: { name: string }) => void;
-  onUpdateAndFinish: (
-    planId: string,
-    updatedData: ActiveExercise[],
-    duration: number
-  ) => void;
-  exerciseData: ExerciseData;
-}) => {
-  const styles = getStyles(useColorScheme() ?? "light");
-  const colors = Colors[useColorScheme() ?? "light"];
-
-  const [currentExerciseIndex, setCurrentExerciseIndex] = useState(0);
-  const [activeWorkoutData, setActiveWorkoutData] = useState<ActiveExercise[]>(
-    []
-  );
-  const [isResting, setIsResting] = useState(false);
-  const [isPickerVisible, setIsPickerVisible] = useState(false);
-
-  const workoutTimer = useTimer();
-  const restTimer = useCountdown(60, () => {
-    setIsResting(false);
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-  });
-
-  useEffect(() => {
-    const initialData = plan.workouts.map((w) => ({
-      name: w.name,
-      targetReps: w.reps,
-      sets: Array.from({ length: w.sets }, () => ({
-        reps: "",
-        weight: "",
-        isComplete: false,
-      })),
-    }));
-    setActiveWorkoutData(initialData);
-
-    workoutTimer.start();
-    return () => workoutTimer.pause();
-  }, [plan]);
-
-  const handleUpdateSet = (
-    exIndex: number,
-    setIndex: number,
-    field: "reps" | "weight",
-    value: string
-  ) => {
-    const newData = [...activeWorkoutData];
-    newData[exIndex].sets[setIndex][field] = value;
-    setActiveWorkoutData(newData);
-  };
-
-  const handleToggleSet = (exIndex: number, setIndex: number) => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    const newData = [...activeWorkoutData];
-    const currentSet = newData[exIndex].sets[setIndex];
-    currentSet.isComplete = !currentSet.isComplete;
-    setActiveWorkoutData(newData);
-
-    const allSetsComplete = newData[exIndex].sets.every((s) => s.isComplete);
-    if (allSetsComplete && exIndex < activeWorkoutData.length - 1) {
-      setTimeout(() => {
-        setCurrentExerciseIndex(exIndex + 1);
-      }, 300);
-    }
-  };
-
-  const handleAddSet = (exIndex: number) => {
-    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-    const newData = [...activeWorkoutData];
-    newData[exIndex].sets.push({ reps: "", weight: "", isComplete: false });
-    setActiveWorkoutData(newData);
-  };
-
-  const handleDeleteSet = (exIndex: number, setIndex: number) => {
-    Alert.alert("Delete Set?", "Are you sure you want to delete this set?", [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: "Delete",
-        style: "destructive",
-        onPress: () => {
-          LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-          const newData = [...activeWorkoutData];
-          newData[exIndex].sets.splice(setIndex, 1);
-          setActiveWorkoutData(newData);
-        },
-      },
-    ]);
-  };
-
-  const handleDeleteExercise = (exIndex: number) => {
-    Alert.alert(
-      "Remove Exercise?",
-      "Are you sure you want to remove this exercise from the session?",
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Remove",
-          style: "destructive",
-          onPress: () => {
-            LayoutAnimation.configureNext(
-              LayoutAnimation.Presets.easeInEaseOut
-            );
-            setActiveWorkoutData((prev) =>
-              prev.filter((_, index) => index !== exIndex)
-            );
-          },
-        },
-      ]
-    );
-  };
-
-  const handleSelectExercises = (selectedExercises: Exercise[]) => {
-    const newExercises = selectedExercises.map((ex) => ({
-      name: ex.name,
-      targetReps: "8-12", // Default reps
-      sets: Array.from({ length: 3 }, () => ({
-        reps: "",
-        weight: "",
-        isComplete: false,
-      })),
-    }));
-    setActiveWorkoutData((prev) => [...prev, ...newExercises]);
-    setIsPickerVisible(false);
-  };
-
-  const checkForModifications = () => {
-    if (activeWorkoutData.length !== plan.workouts.length) {
-      return true;
-    }
-    for (let i = 0; i < activeWorkoutData.length; i++) {
-      if (activeWorkoutData[i].name !== plan.workouts[i].name) return true;
-      if (activeWorkoutData[i].sets.length !== plan.workouts[i].sets) {
-        return true;
-      }
-    }
-    return false;
-  };
-
-  const handleAttemptFinish = () => {
-    const hasChanged = checkForModifications();
-
-    if (hasChanged) {
-      Alert.alert(
-        "Update Workout Plan?",
-        "You've made changes to this workout. Would you like to save them to the original plan?",
-        [
-          {
-            text: "Update & Finish",
-            onPress: () =>
-              onUpdateAndFinish(plan.id, activeWorkoutData, workoutTimer.time),
-          },
-          {
-            text: "Finish Without Updating",
-            onPress: () => onFinish(plan, activeWorkoutData, workoutTimer.time),
-            style: "destructive",
-          },
-          { text: "Cancel", style: "cancel" },
-        ]
-      );
-    } else {
-      Alert.alert(
-        "Finish Workout?",
-        "Are you sure you want to end this session?",
-        [
-          { text: "Cancel", style: "cancel" },
-          {
-            text: "Finish",
-            style: "destructive",
-            onPress: () => onFinish(plan, activeWorkoutData, workoutTimer.time),
-          },
-        ]
-      );
-    }
-  };
-
-  if (activeWorkoutData.length === 0 && !plan) {
-    return (
-      <View style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
-        <ActivityIndicator color={colors.primary} />
-      </View>
-    );
-  }
-
-  return (
-    <View style={styles.activeWorkoutContainer}>
-      <ExercisePickerModal
-        visible={isPickerVisible}
-        onClose={() => setIsPickerVisible(false)}
-        onSelect={handleSelectExercises}
-        exerciseData={exerciseData}
-      />
-      <ScrollView contentContainerStyle={styles.activeWorkoutScrollView}>
-        <Header title={plan.planName} />
-        <View style={styles.timerContainer}>
-          <View>
-            <Text style={styles.timerLabel}>
-              {isResting ? "RESTING" : "ELAPSED TIME"}
-            </Text>
-            <Text style={styles.timerText}>
-              {isResting
-                ? `00:${restTimer.time.toString().padStart(2, "0")}`
-                : workoutTimer.formattedTime}
-            </Text>
-          </View>
-        </View>
-
-        {activeWorkoutData.map((exercise, exIndex) => (
-          <View
-            key={`${exIndex}-${exercise.name}`}
-            style={[
-              styles.exerciseCard,
-              currentExerciseIndex === exIndex && styles.exerciseCardActive,
-            ]}
-          >
-            <View style={styles.exerciseHeader}>
-              <TouchableOpacity
-                style={styles.deleteExerciseButton}
-                onPress={() => handleDeleteExercise(exIndex)}
-              >
-                <Feather name="trash-2" size={20} color={colors.destructive} />
-              </TouchableOpacity>
-              <View style={styles.exerciseHeaderTitle}>
-                <Text style={styles.exerciseName}>{exercise.name}</Text>
-                <Text style={styles.exerciseDetails}>
-                  {exercise.sets.length} Sets
-                </Text>
-              </View>
-              <TouchableOpacity
-                style={styles.infoIconTouchable}
-                onPress={() => onViewExerciseDetails({ name: exercise.name })}
-              >
-                <Feather name="info" size={22} color={colors.subtleText} />
-              </TouchableOpacity>
-            </View>
-
-            {/* Sets Header */}
-            <View style={styles.setsHeaderRow}>
-              <View style={styles.setColSmall}>
-                <Text style={styles.setsHeaderText}>Set</Text>
-              </View>
-              <View style={styles.setColMedium}>
-                <Text style={styles.setsHeaderText}>Weight</Text>
-              </View>
-              <View style={styles.setColMedium}>
-                <Text style={styles.setsHeaderText}>Reps</Text>
-              </View>
-              <View style={styles.setColMedium}>
-                <Text style={styles.setsHeaderText}>Done</Text>
-              </View>
-              <View style={styles.setColSmall} />
-            </View>
-
-            {/* Editable Sets */}
-            {exercise.sets.map((setData, setIndex) => (
-              <View
-                key={setIndex}
-                style={[
-                  styles.setRow,
-                  setData.isComplete && styles.setRowComplete,
-                ]}
-              >
-                <View style={styles.setColSmall}>
-                  <Text style={styles.setNumberText}>{setIndex + 1}</Text>
-                </View>
-                <View style={styles.setColMedium}>
-                  <TextInput
-                    style={styles.setTextInput}
-                    placeholder="-"
-                    placeholderTextColor={colors.subtleText}
-                    keyboardType="numeric"
-                    value={setData.weight}
-                    onChangeText={(val) =>
-                      handleUpdateSet(exIndex, setIndex, "weight", val)
-                    }
-                  />
-                </View>
-                <View style={styles.setColMedium}>
-                  <TextInput
-                    style={styles.setTextInput}
-                    placeholder="-"
-                    placeholderTextColor={colors.subtleText}
-                    keyboardType="numeric"
-                    value={setData.reps}
-                    onChangeText={(val) =>
-                      handleUpdateSet(exIndex, setIndex, "reps", val)
-                    }
-                  />
-                </View>
-                <View style={styles.setColMedium}>
-                  <TouchableOpacity
-                    style={[
-                      styles.setCircle,
-                      setData.isComplete && styles.setCircleComplete,
-                    ]}
-                    onPress={() => handleToggleSet(exIndex, setIndex)}
-                  >
-                    {setData.isComplete && (
-                      <Feather name="check" size={20} color={"#fff"} />
-                    )}
-                  </TouchableOpacity>
-                </View>
-                <View style={styles.setColSmall}>
-                  <TouchableOpacity
-                    style={styles.deleteSetButton}
-                    onPress={() => handleDeleteSet(exIndex, setIndex)}
-                  >
-                    <Feather name="x" size={20} color={colors.subtleText} />
-                  </TouchableOpacity>
-                </View>
-              </View>
-            ))}
-
-            <TouchableOpacity
-              style={styles.addSetButton}
-              onPress={() => handleAddSet(exIndex)}
-            >
-              <Feather name="plus" size={16} color={colors.primary} />
-              <Text style={styles.addSetButtonText}>Add Set</Text>
-            </TouchableOpacity>
-
-            {exercise.sets.every((s) => s.isComplete) &&
-              currentExerciseIndex === exIndex && (
-                <TouchableOpacity
-                  style={styles.restButton}
-                  onPress={() => setIsResting(true)}
-                >
-                  <Feather name="clock" size={18} color={"#fff"} />
-                  <Text style={styles.restButtonText}>Start 60s Rest</Text>
-                </TouchableOpacity>
-              )}
-          </View>
-        ))}
-
-        <TouchableOpacity
-          style={styles.addExerciseButton}
-          onPress={() => setIsPickerVisible(true)}
-        >
-          <Feather name="plus-circle" size={20} color={colors.primary} />
-          <Text style={styles.addExerciseButtonText}>Add Exercise</Text>
-        </TouchableOpacity>
-
-        <View style={styles.footer}>
-          <MusicPlayerCard />
-          <TouchableOpacity
-            style={styles.finishButton}
-            onPress={handleAttemptFinish}
-          >
-            <Text style={styles.finishButtonText}>Finish Workout</Text>
-          </TouchableOpacity>
-        </View>
-      </ScrollView>
-    </View>
-  );
-};
-
-const WorkoutPlanPreviewModal = ({
-  visible,
-  onClose,
-  plan,
-  onStart,
-}: {
-  visible: boolean;
-  onClose: () => void;
-  plan: WorkoutPlan | null;
-  onStart: (plan: WorkoutPlan) => void;
-}) => {
-  const styles = getStyles(useColorScheme() ?? "light");
-  const colors = Colors[useColorScheme() ?? "light"];
-
-  if (!plan) {
-    return null;
-  }
-
-  return (
-    <Modal
-      animationType="fade"
-      transparent={true}
-      visible={visible}
-      onRequestClose={onClose}
-    >
-      <View style={styles.previewModalOverlay}>
-        <SafeAreaView style={styles.previewModalContainer}>
-          <View style={styles.modalHeader}>
-            <Text style={styles.modalTitle}>{plan.planName}</Text>
-            <TouchableOpacity onPress={onClose}>
-              <Feather name="x-circle" size={26} color={colors.subtleText} />
-            </TouchableOpacity>
-          </View>
-          <FlatList
-            data={plan.workouts}
-            keyExtractor={(item, index) => `${item.name}-${index}`}
-            contentContainerStyle={styles.previewListContent}
-            ItemSeparatorComponent={() => (
-              <View style={styles.previewSeparator} />
-            )}
-            renderItem={({ item, index }) => (
-              <View style={styles.previewExerciseCard}>
-                <Text style={styles.previewExerciseNumber}>{index + 1}</Text>
-                <View style={styles.previewExerciseInfo}>
-                  <Text style={styles.previewExerciseName}>{item.name}</Text>
-                  <Text style={styles.previewExerciseDetails}>
-                    {item.sets} sets x {item.reps} reps
-                  </Text>
-                </View>
-              </View>
-            )}
-          />
-          <View style={styles.previewFooter}>
-            <TouchableOpacity
-              style={styles.previewStartButton}
-              onPress={() => onStart(plan)}
-            >
-              <Text style={styles.previewStartButtonText}>Start Workout</Text>
-            </TouchableOpacity>
-          </View>
-        </SafeAreaView>
-      </View>
-    </Modal>
-  );
-};
-
-const WorkoutPlanSelectionModal = ({
-  visible,
-  onClose,
-  plans,
-  onSelectPlan,
-}: {
-  visible: boolean;
-  onClose: () => void;
-  plans: WorkoutPlan[];
-  onSelectPlan: (plan: WorkoutPlan) => void;
-}) => {
-  const styles = getStyles(useColorScheme() ?? "light");
-  const colors = Colors[useColorScheme() ?? "light"];
-
-  return (
-    <Modal
-      animationType="fade"
-      transparent={true}
-      visible={visible}
-      onRequestClose={onClose}
-    >
-      <View style={styles.modalOverlay}>
-        <SafeAreaView style={styles.modalContainer}>
-          <View style={styles.modalHeader}>
-            <Text style={styles.modalTitle}>Choose a Plan</Text>
-            <TouchableOpacity onPress={onClose}>
-              <Feather name="x-circle" size={26} color={colors.subtleText} />
-            </TouchableOpacity>
-          </View>
-          <FlatList
-            data={plans}
-            keyExtractor={(item) => item.id}
-            numColumns={2}
-            columnWrapperStyle={styles.gridRow}
-            renderItem={({ item }) => (
-              <SelectablePlanCard
-                plan={item}
-                onPress={() => onSelectPlan(item)}
-              />
-            )}
-            contentContainerStyle={styles.modalListContent}
-          />
-        </SafeAreaView>
-      </View>
-    </Modal>
-  );
-};
-
-const ExerciseDetailModal = ({
-  visible,
-  onClose,
-  exercise,
-}: {
-  visible: boolean;
-  onClose: () => void;
-  exercise: Exercise | null;
-}) => {
-  const styles = getStyles(useColorScheme() ?? "light");
-  const colors = Colors[useColorScheme() ?? "light"];
-
-  if (!exercise) return null;
-
-  const detailItems = [
-    { label: "Level", value: exercise.level },
-    { label: "Equipment", value: exercise.equipment },
-    { label: "Category", value: exercise.category },
-    { label: "Force", value: exercise.force },
-    { label: "Mechanic", value: exercise.mechanic },
-  ].filter((item) => item.value);
-
-  return (
-    <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
-      <SafeAreaView style={styles.detailModalContainer}>
-        <View style={styles.modalHeader}>
-          <Text style={styles.modalTitle} numberOfLines={2}>
-            {exercise.name}
-          </Text>
-          <TouchableOpacity onPress={onClose}>
-            <Feather name="x-circle" size={26} color={colors.subtleText} />
-          </TouchableOpacity>
-        </View>
-        <ScrollView contentContainerStyle={styles.detailScrollContainer}>
-          <View style={styles.detailTagsContainer}>
-            {detailItems.map((item, index) => (
-              <View key={index} style={styles.detailTag}>
-                <Text style={styles.detailTagLabel}>{item.label}:</Text>
-                <Text style={styles.detailTagValue}>{item.value}</Text>
-              </View>
-            ))}
-          </View>
-
-          <View style={styles.detailSection}>
-            <Text style={styles.detailSectionTitle}>Primary Muscles</Text>
-            <Text style={styles.detailText}>
-              {exercise.primaryMuscles.join(", ")}
-            </Text>
-          </View>
-
-          {exercise.secondaryMuscles.length > 0 && (
-            <View style={styles.detailSection}>
-              <Text style={styles.detailSectionTitle}>Secondary Muscles</Text>
-              <Text style={styles.detailText}>
-                {exercise.secondaryMuscles.join(", ")}
-              </Text>
-            </View>
-          )}
-
-          <View style={styles.detailSection}>
-            <Text style={styles.detailSectionTitle}>Instructions</Text>
-            {exercise.instructions.map((step, index) => (
-              <View key={index} style={styles.instructionStep}>
-                <Text style={styles.instructionNumber}>{index + 1}.</Text>
-                <Text style={styles.instructionText}>{step}</Text>
-              </View>
-            ))}
-          </View>
-        </ScrollView>
-      </SafeAreaView>
-    </Modal>
-  );
-};
-
-// --- NEW FILTER COMPONENTS ---
 interface FilterSelectionModalProps {
   visible: boolean;
   onClose: () => void;
@@ -1230,6 +599,18 @@ const ExerciseFilter: React.FC<ExerciseFilterProps> = ({
           value={selectedFilters.level}
           onPress={() => setActiveFilter("level")}
         />
+        <View style={styles.pickerDivider} />
+        <FilterButton
+          label="Category"
+          value={selectedFilters.category}
+          onPress={() => setActiveFilter("category")}
+        />
+        <View style={styles.pickerDivider} />
+        <FilterButton
+          label="Force Type"
+          value={selectedFilters.force}
+          onPress={() => setActiveFilter("force")}
+        />
       </View>
 
       {modalProps && activeFilter && (
@@ -1248,22 +629,712 @@ const ExerciseFilter: React.FC<ExerciseFilterProps> = ({
   );
 };
 
-const ExercisePickerModal = ({
-  visible,
-  onClose,
-  onSelect,
+// =================================================================================================
+// --- SCREEN VIEWS AND MODALS ---
+// =================================================================================================
+
+const StartWorkoutView = ({
+  onChoosePlan,
+  onQuickStart,
+  recentWorkouts,
+  onPreviewFromHistory,
+  onClearHistory,
+  refreshing,
+  onRefresh,
+}: {
+  onChoosePlan: () => void;
+  onQuickStart: () => void;
+  recentWorkouts: WorkoutHistory[];
+  onPreviewFromHistory: (historyItem: WorkoutHistory) => void;
+  onClearHistory: () => void;
+  refreshing: boolean;
+  onRefresh: () => void;
+}) => {
+  const styles = getStyles(useColorScheme() ?? "light");
+  const colors = Colors[useColorScheme() ?? "light"];
+  return (
+    <ScrollView
+      contentContainerStyle={styles.startViewContainer}
+      refreshControl={
+        <RefreshControl
+          refreshing={refreshing}
+          onRefresh={onRefresh}
+          tintColor={colors.primary}
+        />
+      }
+    >
+      <View style={styles.mainContent}>
+        <Text style={styles.pageTitle}>Start Session</Text>
+        <Text style={styles.startViewSubtitle}>
+          Select a workout plan to begin your training.
+        </Text>
+        <TouchableOpacity style={styles.primaryButton} onPress={onChoosePlan}>
+          <Feather name="list" size={20} color="#FFFFFF" />
+          <Text style={styles.primaryButtonText}>Choose Workout Plan</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.secondaryButton, { marginTop: 15 }]}
+          onPress={onQuickStart}
+        >
+          <Feather name="plus-circle" size={20} color={colors.primary} />
+          <Text style={styles.secondaryButtonText}>
+            Quick Start Empty Session
+          </Text>
+        </TouchableOpacity>
+      </View>
+
+      <View style={styles.historySection}>
+        <Text style={styles.historyTitle}>Get back into it</Text>
+        {recentWorkouts.length > 0 ? (
+          <>
+            <FlatList
+              data={recentWorkouts}
+              keyExtractor={(item) => item.id}
+              numColumns={2}
+              scrollEnabled={false}
+              columnWrapperStyle={{ justifyContent: "space-between" }}
+              renderItem={({ item }) => (
+                <HistoryCard
+                  item={item}
+                  onPress={() => onPreviewFromHistory(item)}
+                />
+              )}
+            />
+            <TouchableOpacity
+              style={styles.clearHistoryButton}
+              onPress={onClearHistory}
+            >
+              <Text style={styles.clearHistoryButtonText}>Clear History</Text>
+            </TouchableOpacity>
+          </>
+        ) : (
+          <View style={styles.historyEmpty}>
+            <Text style={styles.historyEmptyText}>
+              No recent workouts. Finish a session to see it here!
+            </Text>
+          </View>
+        )}
+      </View>
+    </ScrollView>
+  );
+};
+
+const ActiveWorkoutView = ({
+  plan,
+  onFinish,
+  onViewExerciseDetails,
+  onUpdateAndFinish,
   exerciseData,
 }: {
-  visible: boolean;
-  onClose: () => void;
-  onSelect: (selected: Exercise[]) => void;
+  plan: WorkoutPlan;
+  onFinish: (
+    plan: WorkoutPlan,
+    sessionData: ActiveExercise[],
+    duration: number
+  ) => void;
+  onViewExerciseDetails: (exercise: { name: string }) => void;
+  onUpdateAndFinish: (
+    planId: string,
+    updatedData: ActiveExercise[],
+    duration: number
+  ) => void;
   exerciseData: ExerciseData;
 }) => {
   const styles = getStyles(useColorScheme() ?? "light");
   const colors = Colors[useColorScheme() ?? "light"];
 
+  const [currentExerciseIndex, setCurrentExerciseIndex] = useState(0);
+  const [activeWorkoutData, setActiveWorkoutData] = useState<ActiveExercise[]>(
+    []
+  );
+  const [isResting, setIsResting] = useState(false);
+  const [isPickerVisible, setIsPickerVisible] = useState(false);
+
+  const onRestComplete = useCallback(() => {
+    setIsResting(false);
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+  }, []);
+
+  const workoutTimer = useTimer();
+  const restTimer = useCountdown(60, onRestComplete);
+
+  useEffect(() => {
+    const initialData = plan.workouts.map((w) => ({
+      name: w.name,
+      targetReps: w.reps,
+      sets: Array.from({ length: w.sets }, () => ({
+        reps: "",
+        weight: "",
+        isComplete: false,
+      })),
+    }));
+    setActiveWorkoutData(initialData);
+
+    workoutTimer.start();
+    return () => workoutTimer.pause();
+  }, [plan]);
+
+  const handleUpdateSet = (
+    exIndex: number,
+    setIndex: number,
+    field: "reps" | "weight",
+    value: string
+  ) => {
+    const newData = [...activeWorkoutData];
+    newData[exIndex].sets[setIndex][field] = value;
+    setActiveWorkoutData(newData);
+  };
+
+  const handleToggleSet = (exIndex: number, setIndex: number) => {
+    if (isResting) {
+      setIsResting(false);
+      restTimer.stop();
+    }
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    const newData = [...activeWorkoutData];
+    const currentSet = newData[exIndex].sets[setIndex];
+    currentSet.isComplete = !currentSet.isComplete;
+    setActiveWorkoutData(newData);
+
+    const allSetsComplete = newData[exIndex].sets.every((s) => s.isComplete);
+    if (allSetsComplete && exIndex < activeWorkoutData.length - 1) {
+      setTimeout(() => {
+        setCurrentExerciseIndex(exIndex + 1);
+      }, 300);
+    }
+  };
+
+  const handleAddSet = (exIndex: number) => {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    const newData = [...activeWorkoutData];
+    newData[exIndex].sets.push({ reps: "", weight: "", isComplete: false });
+    setActiveWorkoutData(newData);
+  };
+
+  const handleDeleteSet = (exIndex: number, setIndex: number) => {
+    Alert.alert("Delete Set?", "Are you sure you want to delete this set?", [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Delete",
+        style: "destructive",
+        onPress: () => {
+          LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+          const newData = [...activeWorkoutData];
+          newData[exIndex].sets.splice(setIndex, 1);
+          setActiveWorkoutData(newData);
+        },
+      },
+    ]);
+  };
+
+  const handleDeleteExercise = (exIndex: number) => {
+    Alert.alert(
+      "Remove Exercise?",
+      "Are you sure you want to remove this exercise from the session?",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Remove",
+          style: "destructive",
+          onPress: () => {
+            LayoutAnimation.configureNext(
+              LayoutAnimation.Presets.easeInEaseOut
+            );
+            setActiveWorkoutData((prev) =>
+              prev.filter((_, index) => index !== exIndex)
+            );
+          },
+        },
+      ]
+    );
+  };
+
+  const handleSelectExercises = (selectedExercises: Exercise[]) => {
+    const newExercises = selectedExercises.map((ex) => ({
+      name: ex.name,
+      targetReps: "8-12", // Default reps
+      sets: Array.from({ length: 3 }, () => ({
+        reps: "",
+        weight: "",
+        isComplete: false,
+      })),
+    }));
+    setActiveWorkoutData((prev) => [...prev, ...newExercises]);
+    setIsPickerVisible(false);
+  };
+
+  const checkForModifications = () => {
+    if (plan.id.startsWith("quick-start")) return false;
+
+    if (activeWorkoutData.length !== plan.workouts.length) {
+      return true;
+    }
+    for (let i = 0; i < activeWorkoutData.length; i++) {
+      if (activeWorkoutData[i].name !== plan.workouts[i].name) return true;
+      if (activeWorkoutData[i].sets.length !== plan.workouts[i].sets) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  const handleAttemptFinish = () => {
+    const hasChanged = checkForModifications();
+
+    if (hasChanged) {
+      Alert.alert(
+        "Update Workout Plan?",
+        "You've made changes to this workout. Would you like to save them to the original plan?",
+        [
+          {
+            text: "Update & Finish",
+            onPress: () =>
+              onUpdateAndFinish(plan.id, activeWorkoutData, workoutTimer.time),
+          },
+          {
+            text: "Finish Without Updating",
+            onPress: () => onFinish(plan, activeWorkoutData, workoutTimer.time),
+            style: "destructive",
+          },
+          { text: "Cancel", style: "cancel" },
+        ]
+      );
+    } else {
+      Alert.alert(
+        "Finish Workout?",
+        "Are you sure you want to end this session?",
+        [
+          { text: "Cancel", style: "cancel" },
+          {
+            text: "Finish",
+            style: "destructive",
+            onPress: () => onFinish(plan, activeWorkoutData, workoutTimer.time),
+          },
+        ]
+      );
+    }
+  };
+
+  if (activeWorkoutData.length === 0 && !plan.id.startsWith("quick-start")) {
+    return (
+      <View style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
+        <ActivityIndicator color={colors.primary} />
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.activeWorkoutContainer}>
+      <ExerciseLibraryModal
+        visible={isPickerVisible}
+        onClose={() => setIsPickerVisible(false)}
+        onSelect={handleSelectExercises}
+        exerciseData={exerciseData}
+        mode="pick"
+      />
+      <ScrollView contentContainerStyle={styles.activeWorkoutScrollView}>
+        <Header title={plan.planName} />
+        <View style={styles.timerContainer}>
+          {isResting ? (
+            <View>
+              <Text style={[styles.timerLabel, { textAlign: "left" }]}>
+                REST
+              </Text>
+              <Text style={styles.timerText}>
+                {`00:${restTimer.time.toString().padStart(2, "0")}`}
+              </Text>
+            </View>
+          ) : (
+            <View />
+          )}
+          <View style={styles.timerBlockRight}>
+            <Text style={styles.timerLabel}>ELAPSED TIME</Text>
+            <Text style={styles.timerText}>{workoutTimer.formattedTime}</Text>
+          </View>
+        </View>
+
+        {activeWorkoutData.map((exercise, exIndex) => (
+          <View
+            key={`${exIndex}-${exercise.name}`}
+            style={[
+              styles.exerciseCard,
+              currentExerciseIndex === exIndex && styles.exerciseCardActive,
+            ]}
+          >
+            <View style={styles.exerciseHeader}>
+              <TouchableOpacity
+                style={styles.deleteExerciseButton}
+                onPress={() => handleDeleteExercise(exIndex)}
+              >
+                <Feather name="trash-2" size={20} color={colors.destructive} />
+              </TouchableOpacity>
+              <View style={styles.exerciseHeaderTitle}>
+                <Text style={styles.exerciseName}>{exercise.name}</Text>
+                <Text style={styles.exerciseDetails}>
+                  {exercise.sets.length} Sets
+                </Text>
+              </View>
+              <TouchableOpacity
+                style={styles.infoIconTouchable}
+                onPress={() => onViewExerciseDetails({ name: exercise.name })}
+              >
+                <Feather name="info" size={22} color={colors.subtleText} />
+              </TouchableOpacity>
+            </View>
+
+            {/* Sets Header */}
+            <View style={styles.setsHeaderRow}>
+              <View style={styles.setColSmall}>
+                <Text style={styles.setsHeaderText}>Set</Text>
+              </View>
+              <View style={styles.setColMedium}>
+                <Text style={styles.setsHeaderText}>Weight</Text>
+              </View>
+              <View style={styles.setColMedium}>
+                <Text style={styles.setsHeaderText}>Reps</Text>
+              </View>
+              <View style={styles.setColMedium}>
+                <Text style={styles.setsHeaderText}>Done</Text>
+              </View>
+              <View style={styles.setColSmall} />
+            </View>
+
+            {/* Editable Sets */}
+            {exercise.sets.map((setData, setIndex) => (
+              <View
+                key={setIndex}
+                style={[
+                  styles.setRow,
+                  setData.isComplete && styles.setRowComplete,
+                ]}
+              >
+                <View style={styles.setColSmall}>
+                  <Text style={styles.setNumberText}>{setIndex + 1}</Text>
+                </View>
+                <View style={styles.setColMedium}>
+                  <TextInput
+                    style={styles.setTextInput}
+                    placeholder="-"
+                    placeholderTextColor={colors.subtleText}
+                    keyboardType="numeric"
+                    value={setData.weight}
+                    onChangeText={(val) =>
+                      handleUpdateSet(exIndex, setIndex, "weight", val)
+                    }
+                  />
+                </View>
+                <View style={styles.setColMedium}>
+                  <TextInput
+                    style={styles.setTextInput}
+                    placeholder="-"
+                    placeholderTextColor={colors.subtleText}
+                    keyboardType="numeric"
+                    value={setData.reps}
+                    onChangeText={(val) =>
+                      handleUpdateSet(exIndex, setIndex, "reps", val)
+                    }
+                  />
+                </View>
+                <View style={styles.setColMedium}>
+                  <TouchableOpacity
+                    style={[
+                      styles.setCircle,
+                      setData.isComplete && styles.setCircleComplete,
+                    ]}
+                    onPress={() => handleToggleSet(exIndex, setIndex)}
+                  >
+                    {setData.isComplete && (
+                      <Feather name="check" size={20} color={"#fff"} />
+                    )}
+                  </TouchableOpacity>
+                </View>
+                <View style={styles.setColSmall}>
+                  <TouchableOpacity
+                    style={styles.deleteSetButton}
+                    onPress={() => handleDeleteSet(exIndex, setIndex)}
+                  >
+                    <Feather name="x" size={20} color={colors.subtleText} />
+                  </TouchableOpacity>
+                </View>
+              </View>
+            ))}
+
+            <TouchableOpacity
+              style={styles.addSetButton}
+              onPress={() => handleAddSet(exIndex)}
+            >
+              <Feather name="plus" size={16} color={colors.primary} />
+              <Text style={styles.addSetButtonText}>Add Set</Text>
+            </TouchableOpacity>
+
+            {exercise.sets.every((s) => s.isComplete) &&
+              currentExerciseIndex === exIndex &&
+              exIndex === activeWorkoutData.length - 1 && (
+                <View style={{ marginTop: 20 }}>
+                  {isResting ? (
+                    <TouchableOpacity
+                      style={styles.endRestButton}
+                      onPress={() => {
+                        setIsResting(false);
+                        restTimer.stop();
+                      }}
+                    >
+                      <Feather name="x" size={18} color={colors.destructive} />
+                      <Text style={styles.endRestButtonText}>End Rest</Text>
+                    </TouchableOpacity>
+                  ) : (
+                    <TouchableOpacity
+                      style={styles.restButton}
+                      onPress={() => {
+                        setIsResting(true);
+                        restTimer.start();
+                      }}
+                    >
+                      <Feather name="clock" size={18} color={"#fff"} />
+                      <Text style={styles.restButtonText}>Start 60s Rest</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+              )}
+          </View>
+        ))}
+
+        <TouchableOpacity
+          style={styles.addExerciseButton}
+          onPress={() => setIsPickerVisible(true)}
+        >
+          <Feather name="plus-circle" size={20} color={colors.primary} />
+          <Text style={styles.addExerciseButtonText}>Add Exercise</Text>
+        </TouchableOpacity>
+
+        <View style={styles.footer}>
+          <MusicPlayerCard />
+          <TouchableOpacity
+            style={styles.finishButton}
+            onPress={handleAttemptFinish}
+          >
+            <Text style={styles.finishButtonText}>Finish Workout</Text>
+          </TouchableOpacity>
+        </View>
+      </ScrollView>
+    </View>
+  );
+};
+
+const WorkoutPlanPreviewModal = ({
+  visible,
+  onClose,
+  plan,
+  onStart,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  plan: WorkoutPlan | null;
+  onStart: (plan: WorkoutPlan) => void;
+}) => {
+  const styles = getStyles(useColorScheme() ?? "light");
+  const colors = Colors[useColorScheme() ?? "light"];
+
+  if (!plan) {
+    return null;
+  }
+
+  return (
+    <Modal
+      animationType="fade"
+      transparent={true}
+      visible={visible}
+      onRequestClose={onClose}
+    >
+      <View style={styles.previewModalOverlay}>
+        <SafeAreaView style={styles.previewModalContainer}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>{plan.planName}</Text>
+            <TouchableOpacity onPress={onClose}>
+              <Feather name="x-circle" size={26} color={colors.subtleText} />
+            </TouchableOpacity>
+          </View>
+          <FlatList
+            data={plan.workouts}
+            keyExtractor={(item, index) => `${item.name}-${index}`}
+            contentContainerStyle={styles.previewListContent}
+            ItemSeparatorComponent={() => (
+              <View style={styles.previewSeparator} />
+            )}
+            renderItem={({ item, index }) => (
+              <View style={styles.previewExerciseCard}>
+                <Text style={styles.previewExerciseNumber}>{index + 1}</Text>
+                <View style={styles.previewExerciseInfo}>
+                  <Text style={styles.previewExerciseName}>{item.name}</Text>
+                  <Text style={styles.previewExerciseDetails}>
+                    {item.sets} sets x {item.reps} reps
+                  </Text>
+                </View>
+              </View>
+            )}
+          />
+          <View style={styles.previewFooter}>
+            <TouchableOpacity
+              style={styles.previewStartButton}
+              onPress={() => onStart(plan)}
+            >
+              <Text style={styles.previewStartButtonText}>Start Workout</Text>
+            </TouchableOpacity>
+          </View>
+        </SafeAreaView>
+      </View>
+    </Modal>
+  );
+};
+
+const WorkoutPlanSelectionModal = ({
+  visible,
+  onClose,
+  plans,
+  onSelectPlan,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  plans: WorkoutPlan[];
+  onSelectPlan: (plan: WorkoutPlan) => void;
+}) => {
+  const styles = getStyles(useColorScheme() ?? "light");
+  const colors = Colors[useColorScheme() ?? "light"];
+
+  return (
+    <Modal
+      animationType="fade"
+      transparent={true}
+      visible={visible}
+      onRequestClose={onClose}
+    >
+      <View style={styles.modalOverlay}>
+        <SafeAreaView style={styles.modalContainer}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>Choose a Plan</Text>
+            <TouchableOpacity onPress={onClose}>
+              <Feather name="x-circle" size={26} color={colors.subtleText} />
+            </TouchableOpacity>
+          </View>
+          <FlatList
+            data={plans}
+            keyExtractor={(item) => item.id}
+            numColumns={2}
+            columnWrapperStyle={styles.gridRow}
+            renderItem={({ item }) => (
+              <SelectablePlanCard
+                plan={item}
+                onPress={() => onSelectPlan(item)}
+              />
+            )}
+            contentContainerStyle={styles.modalListContent}
+          />
+        </SafeAreaView>
+      </View>
+    </Modal>
+  );
+};
+
+interface ExerciseDetailModalProps {
+  visible: boolean;
+  onClose: () => void;
+  exercise: Exercise | null;
+}
+
+const ExerciseDetailModal: React.FC<ExerciseDetailModalProps> = ({
+  visible,
+  onClose,
+  exercise,
+}) => {
+  const styles = getStyles(useColorScheme() ?? "light");
+  const colors = Colors[useColorScheme() ?? "light"];
+  const insets = useSafeAreaInsets();
+
+  if (!exercise) return null;
+
+  const detailItems = [
+    { label: "Level", value: exercise.level },
+    { label: "Equipment", value: exercise.equipment },
+    { label: "Category", value: exercise.category },
+    { label: "Force", value: exercise.force },
+    { label: "Mechanic", value: exercise.mechanic },
+  ].filter((item) => item.value);
+
+  return (
+    <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
+      <View style={[styles.detailModalContainer, { paddingTop: insets.top }]}>
+        <View style={styles.modalHeader}>
+          <Text style={styles.modalTitle} numberOfLines={2}>
+            {exercise.name}
+          </Text>
+          <TouchableOpacity onPress={onClose}>
+            <Feather name="x-circle" size={26} color={colors.subtleText} />
+          </TouchableOpacity>
+        </View>
+        <ScrollView contentContainerStyle={styles.detailScrollContainer}>
+          <View style={styles.detailTagsContainer}>
+            {detailItems.map((item, index) => (
+              <View key={index} style={styles.detailTag}>
+                <Text style={styles.detailTagLabel}>{item.label}:</Text>
+                <Text style={styles.detailTagValue}>{item.value}</Text>
+              </View>
+            ))}
+          </View>
+
+          <View style={styles.detailSection}>
+            <Text style={styles.detailSectionTitle}>Primary Muscles</Text>
+            <Text style={styles.detailText}>
+              {exercise.primaryMuscles.join(", ")}
+            </Text>
+          </View>
+
+          {exercise.secondaryMuscles.length > 0 && (
+            <View style={styles.detailSection}>
+              <Text style={styles.detailSectionTitle}>Secondary Muscles</Text>
+              <Text style={styles.detailText}>
+                {exercise.secondaryMuscles.join(", ")}
+              </Text>
+            </View>
+          )}
+
+          <View style={styles.detailSection}>
+            <Text style={styles.detailSectionTitle}>Instructions</Text>
+            {exercise.instructions.map((step, index) => (
+              <View key={index} style={styles.instructionStep}>
+                <Text style={styles.instructionNumber}>{index + 1}.</Text>
+                <Text style={styles.instructionText}>{step}</Text>
+              </View>
+            ))}
+          </View>
+        </ScrollView>
+      </View>
+    </Modal>
+  );
+};
+
+// --- UNIFIED EXERCISE LIBRARY MODAL ---
+interface ExerciseLibraryModalProps {
+  visible: boolean;
+  onClose: () => void;
+  exerciseData: ExerciseData;
+  mode: "explore" | "pick";
+  onSelect?: (selectedExercises: Exercise[]) => void;
+}
+
+const ExerciseLibraryModal: React.FC<ExerciseLibraryModalProps> = ({
+  visible,
+  onClose,
+  exerciseData,
+  mode,
+  onSelect,
+}) => {
+  const colorScheme = useColorScheme() ?? "light";
+  const styles = getStyles(colorScheme);
+  const colors = Colors[colorScheme];
+  const insets = useSafeAreaInsets();
+
   const [searchQuery, setSearchQuery] = useState("");
-  const [selected, setSelected] = useState<Exercise[]>([]);
+  const [selected, setSelected] = useState<string[]>([]);
   const [viewingExercise, setViewingExercise] = useState<Exercise | null>(null);
   const [filters, setFilters] = useState<Filters>({
     muscle: null,
@@ -1272,6 +1343,21 @@ const ExercisePickerModal = ({
     equipment: null,
     force: null,
   });
+
+  // Reset state when modal is closed/opened
+  useEffect(() => {
+    if (!visible) {
+      setSearchQuery("");
+      setSelected([]);
+      setFilters({
+        muscle: null,
+        category: null,
+        level: null,
+        equipment: null,
+        force: null,
+      });
+    }
+  }, [visible]);
 
   const filteredExercises = useMemo(() => {
     let list = exercises as Exercise[];
@@ -1283,6 +1369,10 @@ const ExercisePickerModal = ({
         ex.primaryMuscles.some((m) => m.toLowerCase() === muscle)
       );
     }
+    if (filters.category) {
+      const category = filters.category.toLowerCase();
+      list = list.filter((ex) => ex.category.toLowerCase() === category);
+    }
     if (filters.level) {
       const level = filters.level.toLowerCase();
       list = list.filter((ex) => ex.level.toLowerCase() === level);
@@ -1293,32 +1383,41 @@ const ExercisePickerModal = ({
         (ex) => ex.equipment && ex.equipment.toLowerCase() === equipment
       );
     }
+    if (filters.force) {
+      const force = filters.force.toLowerCase();
+      list = list.filter((ex) => ex.force && ex.force.toLowerCase() === force);
+    }
     if (query) {
       list = list.filter((ex) => ex.name.toLowerCase().includes(query));
     }
     return list;
   }, [searchQuery, filters]);
 
-  const toggleSelection = (exercise: Exercise) => {
-    setSelected((prev) =>
-      prev.find((e) => e.id === exercise.id)
-        ? prev.filter((e) => e.id !== exercise.id)
-        : [...prev, exercise]
+  const toggleSelection = (exerciseId: string) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setSelected((current) =>
+      current.includes(exerciseId)
+        ? current.filter((id) => id !== exerciseId)
+        : [...current, exerciseId]
     );
   };
 
   const handleDone = () => {
-    onSelect(selected);
+    if (mode === "pick" && onSelect) {
+      const selectedExercises = (exercises as Exercise[]).filter((ex) =>
+        selected.includes(ex.id)
+      );
+      onSelect(selectedExercises);
+    }
     onClose();
-    setSelected([]);
   };
 
   const renderItem = ({ item }: { item: Exercise }) => {
-    const isSelected = !!selected.find((e) => e.id === item.id);
+    const isSelected = selected.includes(item.id);
     return (
       <TouchableOpacity
         style={[styles.pickerRow, isSelected && styles.pickerRowSelected]}
-        onPress={() => toggleSelection(item)}
+        onPress={() => toggleSelection(item.id)}
       >
         <TouchableOpacity
           style={styles.infoIconTouchable}
@@ -1346,7 +1445,7 @@ const ExercisePickerModal = ({
 
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
-      <SafeAreaView style={{ flex: 1, backgroundColor: colors.background }}>
+      <View style={[styles.detailModalContainer, { paddingTop: insets.top }]}>
         <ExerciseDetailModal
           visible={!!viewingExercise}
           onClose={() => setViewingExercise(null)}
@@ -1354,7 +1453,7 @@ const ExercisePickerModal = ({
         />
         <View style={styles.pickerModalHeader}>
           <TouchableOpacity style={styles.pickerHeaderButton} onPress={onClose}>
-            <Text style={{ color: colors.primary, fontSize: 16 }}>Cancel</Text>
+            <Text style={{ color: colors.primary, fontSize: 17 }}>Cancel</Text>
           </TouchableOpacity>
           <Text style={styles.pickerModalTitle}>Add Exercises</Text>
           <TouchableOpacity
@@ -1364,7 +1463,7 @@ const ExercisePickerModal = ({
             <Text
               style={{
                 color: colors.primary,
-                fontSize: 16,
+                fontSize: 17,
                 fontWeight: "bold",
               }}
             >
@@ -1376,16 +1475,22 @@ const ExercisePickerModal = ({
           data={filteredExercises}
           keyExtractor={(item) => item.id}
           renderItem={renderItem}
-          contentContainerStyle={{ paddingBottom: 20 }}
+          contentContainerStyle={{
+            paddingHorizontal: 20,
+            paddingBottom: 20,
+          }}
+          ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
           ListHeaderComponent={
             <>
-              <TextInput
-                style={styles.searchInput}
-                placeholder="Search exercises..."
-                placeholderTextColor={colors.subtleText}
-                value={searchQuery}
-                onChangeText={setSearchQuery}
-              />
+              <View style={styles.searchInputContainer}>
+                <TextInput
+                  style={styles.searchInput}
+                  placeholder="Search exercises..."
+                  placeholderTextColor={colors.subtleText}
+                  value={searchQuery}
+                  onChangeText={setSearchQuery}
+                />
+              </View>
               <ExerciseFilter
                 filterOptions={exerciseData}
                 selectedFilters={filters}
@@ -1397,10 +1502,11 @@ const ExercisePickerModal = ({
             </>
           }
         />
-      </SafeAreaView>
+      </View>
     </Modal>
   );
 };
+
 // =================================================================================================
 // --- MAIN SCREEN ---
 // =================================================================================================
@@ -1408,6 +1514,7 @@ export default function WorkoutSessionScreen() {
   const { user } = useAuth();
   const styles = getStyles(useColorScheme() ?? "light");
   const colors = Colors[useColorScheme() ?? "light"];
+  const router = useRouter();
 
   const [isLoading, setIsLoading] = useState(true);
   const [allPlans, setAllPlans] = useState<WorkoutPlan[]>([]);
@@ -1472,29 +1579,59 @@ export default function WorkoutSessionScreen() {
 
   const fetchRecentWorkouts = useCallback(async () => {
     if (!user) return;
+
     const historyCollectionRef = collection(
       db,
       "users",
       user.uid,
       "workoutHistory"
     );
-    const q = query(
+    const quickHistoryCollectionRef = collection(
+      db,
+      "users",
+      user.uid,
+      "workoutQuickHistory"
+    );
+
+    const historyQuery = query(
       historyCollectionRef,
       orderBy("completedAt", "desc"),
       limit(20)
     );
+    const quickHistoryQuery = query(
+      quickHistoryCollectionRef,
+      orderBy("completedAt", "desc"),
+      limit(20)
+    );
+
     try {
-      const querySnapshot = await getDocs(q);
-      const history = querySnapshot.docs.map(
+      const [historySnapshot, quickHistorySnapshot] = await Promise.all([
+        getDocs(historyQuery),
+        getDocs(quickHistoryQuery),
+      ]);
+
+      const regularHistory = historySnapshot.docs.map(
         (doc) => ({ id: doc.id, ...doc.data() } as WorkoutHistory)
+      );
+      const quickHistory = quickHistorySnapshot.docs.map(
+        (doc) => ({ id: doc.id, ...doc.data() } as WorkoutHistory)
+      );
+
+      const combinedHistory = [...regularHistory, ...quickHistory].sort(
+        (a, b) => b.completedAt.toMillis() - a.completedAt.toMillis()
       );
 
       const uniqueWorkouts: WorkoutHistory[] = [];
       const seenPlanIds = new Set<string>();
-      for (const workout of history) {
-        if (!seenPlanIds.has(workout.planId)) {
+      for (const workout of combinedHistory) {
+        if (
+          workout.planId.startsWith("quick-start") ||
+          !seenPlanIds.has(workout.planId)
+        ) {
           uniqueWorkouts.push(workout);
-          seenPlanIds.add(workout.planId);
+          if (!workout.planId.startsWith("quick-start")) {
+            seenPlanIds.add(workout.planId);
+          }
         }
         if (uniqueWorkouts.length >= 4) {
           break;
@@ -1502,19 +1639,11 @@ export default function WorkoutSessionScreen() {
       }
       setRecentWorkouts(uniqueWorkouts);
     } catch (error: any) {
-      console.error("Error fetching workout history: ", error);
-      let errorMessage =
-        "Could not load your workout history. Please check your connection and try again.";
-      // Check for the specific Firestore index error message
-      if (
-        error.message &&
-        (error.message.includes("firestore/failed-precondition") ||
-          error.message.includes("requires an index"))
-      ) {
-        errorMessage =
-          "A database index is required for this feature. Please check the developer console for a link to create it.";
-      }
-      Alert.alert("Loading Error", errorMessage);
+      console.error("Error fetching combined workout history: ", error);
+      Alert.alert(
+        "Loading Error",
+        "Could not load your workout history. Please try again."
+      );
     }
   }, [user]);
 
@@ -1526,7 +1655,7 @@ export default function WorkoutSessionScreen() {
     };
     if (user) {
       loadData();
-    } else if (!user) {
+    } else {
       setIsLoading(false);
     }
   }, [user, fetchWorkoutPlans, fetchRecentWorkouts]);
@@ -1551,6 +1680,31 @@ export default function WorkoutSessionScreen() {
   };
 
   const handlePreviewFromHistory = (historyItem: WorkoutHistory) => {
+    if (historyItem.planId.startsWith("quick-start")) {
+      // Dynamically create a plan from history to preview/restart
+      const workoutsFromHistory: Workout[] = (historyItem.exercises || []).map(
+        (ex) => ({
+          name: ex.name,
+          sets: ex.sets.length,
+          reps: ex.sets[0]?.reps || "8-12", // Best guess for reps target
+        })
+      );
+
+      const tempPlan: WorkoutPlan = {
+        id: historyItem.id, // Use history doc ID for uniqueness
+        planName: historyItem.planName,
+        icon: historyItem.icon,
+        workouts: workoutsFromHistory,
+        order: 999,
+        selectedDays: [],
+        description: `Workout from ${formatDate(historyItem.completedAt)}`,
+      };
+      setPreviewPlan(tempPlan);
+      setIsPreviewModalVisible(true);
+      return;
+    }
+
+    // Original logic for regular plans
     const planToPreview = allPlans.find(
       (plan) => plan.id === historyItem.planId
     );
@@ -1558,18 +1712,21 @@ export default function WorkoutSessionScreen() {
       setPreviewPlan(planToPreview);
       setIsPreviewModalVisible(true);
     } else {
-      Alert.alert(
-        "Plan Not Found",
-        "This workout plan may have been deleted. Please choose another from the list."
-      );
+      Alert.alert("Plan Not Found", "This workout plan may have been deleted.");
     }
   };
 
   const handleQuickStart = () => {
-    Alert.alert(
-      "Quick Start",
-      "This would navigate to a temporary plan creation modal."
-    );
+    const emptyPlan: WorkoutPlan = {
+      id: `quick-start-${Date.now()}`,
+      planName: "Quick Workout",
+      description: "A workout started on the fly.",
+      selectedDays: [],
+      workouts: [],
+      order: 999,
+      icon: "⚡️",
+    };
+    handleStartPlan(emptyPlan);
   };
 
   const handleClearHistory = async () => {
@@ -1584,18 +1741,31 @@ export default function WorkoutSessionScreen() {
           text: "Clear",
           style: "destructive",
           onPress: async () => {
+            if (!user) return;
             try {
-              const historyCollectionRef = collection(
+              const historyRef = collection(
                 db,
                 "users",
                 user.uid,
                 "workoutHistory"
               );
+              const quickHistoryRef = collection(
+                db,
+                "users",
+                user.uid,
+                "workoutQuickHistory"
+              );
+
               const batch = writeBatch(db);
-              const querySnapshot = await getDocs(query(historyCollectionRef));
-              querySnapshot.forEach((doc) => {
-                batch.delete(doc.ref);
-              });
+
+              const historySnapshot = await getDocs(query(historyRef));
+              historySnapshot.forEach((doc) => batch.delete(doc.ref));
+
+              const quickHistorySnapshot = await getDocs(
+                query(quickHistoryRef)
+              );
+              quickHistorySnapshot.forEach((doc) => batch.delete(doc.ref));
+
               await batch.commit();
               setRecentWorkouts([]);
             } catch (error) {
@@ -1617,13 +1787,12 @@ export default function WorkoutSessionScreen() {
     duration: number
   ) => {
     if (!user) return;
-    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
 
     const completedExercises = sessionData
       .map((exercise) => ({
         name: exercise.name,
         sets: exercise.sets
-          .filter((set) => set.isComplete && set.reps && set.weight) // Only save completed sets with data
+          .filter((set) => set.isComplete && set.reps && set.weight)
           .map((set) => ({
             reps: set.reps,
             weight: set.weight,
@@ -1631,29 +1800,88 @@ export default function WorkoutSessionScreen() {
       }))
       .filter((exercise) => exercise.sets.length > 0);
 
-    const historyDoc = {
-      planId: planToFinish.id,
-      planName: planToFinish.planName,
-      icon: planToFinish.icon,
-      completedAt: serverTimestamp(),
-      duration: duration, // in seconds
-      exercises: completedExercises,
-    };
-
-    try {
-      const historyCollectionRef = collection(
-        db,
-        "users",
-        user.uid,
-        "workoutHistory"
+    if (completedExercises.length === 0) {
+      Alert.alert(
+        "Empty Workout",
+        "Your workout was not saved because no sets were completed."
       );
-      await addDoc(historyCollectionRef, historyDoc);
-      fetchRecentWorkouts(); // Refresh history
-    } catch (error) {
-      console.error("Error saving workout history: ", error);
+      LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+      setActivePlan(null);
+      return;
     }
 
-    setActivePlan(null); // Go back to start screen
+    const justFinish = async () => {
+      let historyDoc: any = {
+        planId: planToFinish.id,
+        planName: planToFinish.planName,
+        icon: planToFinish.icon,
+        completedAt: serverTimestamp(),
+        duration: duration,
+        exercises: completedExercises,
+      };
+
+      let collectionRef;
+
+      if (planToFinish.id.startsWith("quick-start")) {
+        collectionRef = collection(
+          db,
+          "users",
+          user.uid,
+          "workoutQuickHistory"
+        );
+        const countSnapshot = await getDocs(collectionRef);
+        const nextNumber = countSnapshot.size + 1;
+        historyDoc.planName = `Quick Workout #${nextNumber}`;
+      } else {
+        collectionRef = collection(db, "users", user.uid, "workoutHistory");
+      }
+
+      try {
+        await addDoc(collectionRef, historyDoc);
+        fetchRecentWorkouts();
+      } catch (error) {
+        console.error("Error saving workout history: ", error);
+      }
+
+      LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+      setActivePlan(null);
+    };
+
+    if (planToFinish.id.startsWith("quick-start")) {
+      Alert.alert(
+        "Save Workout?",
+        "Would you like to save this quick workout as a new permanent template?",
+        [
+          {
+            text: "Save as Template",
+            onPress: () => {
+              const workoutsToPass = sessionData.map((ex) => {
+                const libraryDetails = (exercises as Exercise[]).find(
+                  (libEx) => libEx.name === ex.name
+                );
+                return {
+                  name: ex.name,
+                  sets: ex.sets.length.toString(),
+                  reps: ex.targetReps,
+                  primaryMuscles: libraryDetails?.primaryMuscles || [],
+                };
+              });
+
+              router.push({
+                pathname: "/(tabs)/workoutPlan",
+                params: { exercises: JSON.stringify(workoutsToPass) },
+              });
+
+              justFinish();
+            },
+          },
+          { text: "Finish", onPress: () => justFinish(), style: "default" },
+          { text: "Cancel", style: "cancel" },
+        ]
+      );
+    } else {
+      await justFinish();
+    }
   };
 
   const handleUpdateAndFinish = async (
@@ -1663,25 +1891,21 @@ export default function WorkoutSessionScreen() {
   ) => {
     if (!user) return;
 
-    // 1. Convert active data back to plan format
     const updatedWorkouts: Workout[] = updatedData.map((ex) => ({
       name: ex.name,
       reps: ex.targetReps,
       sets: ex.sets.length,
     }));
 
-    // 2. Update Firestore
     try {
       const planDocRef = doc(db, "users", user.uid, "workoutPlans", planId);
       await updateDoc(planDocRef, { workouts: updatedWorkouts });
     } catch (error) {
       console.error("Error updating plan:", error);
       Alert.alert("Error", "Could not update the workout plan.");
-      // Don't proceed to finish if update fails
       return;
     }
 
-    // 3. Finish workout (log history and reset state)
     if (activePlan) {
       await finishWorkout(activePlan, updatedData, duration);
     }
@@ -1948,9 +2172,14 @@ const getStyles = (scheme: "light" | "dark") => {
       paddingBottom: 60,
     },
     timerContainer: {
-      alignItems: "flex-end",
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
       paddingVertical: 10,
       paddingHorizontal: 20,
+    },
+    timerBlockRight: {
+      alignItems: "flex-end",
     },
     timerLabel: {
       fontSize: 14,
@@ -2104,12 +2333,27 @@ const getStyles = (scheme: "light" | "dark") => {
       alignItems: "center",
       justifyContent: "center",
       gap: 8,
-      marginTop: 20,
     },
     restButtonText: {
       fontSize: 16,
       fontWeight: "bold",
       color: "#FFFFFF",
+    },
+    endRestButton: {
+      backgroundColor: colors.card,
+      paddingVertical: 14,
+      borderRadius: 25,
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 8,
+      borderWidth: 2,
+      borderColor: colors.border,
+    },
+    endRestButtonText: {
+      fontSize: 16,
+      fontWeight: "bold",
+      color: colors.destructive,
     },
     addExerciseButton: {
       flexDirection: "row",
@@ -2366,6 +2610,7 @@ const getStyles = (scheme: "light" | "dark") => {
     pickerHeaderButton: {
       padding: 5,
       minWidth: 60,
+      alignItems: "center",
     },
     pickerModalTitle: {
       fontSize: 17,
@@ -2374,8 +2619,10 @@ const getStyles = (scheme: "light" | "dark") => {
       flex: 1,
       textAlign: "center",
     },
+    searchInputContainer: {
+      paddingTop: 15,
+    },
     searchInput: {
-      margin: 20,
       padding: 12,
       backgroundColor: colors.card,
       borderRadius: 10,
@@ -2385,19 +2632,20 @@ const getStyles = (scheme: "light" | "dark") => {
     pickerRow: {
       flexDirection: "row",
       alignItems: "center",
-      paddingVertical: 10,
-      marginHorizontal: 20,
-      borderBottomWidth: 1,
-      borderBottomColor: colors.border,
+      paddingVertical: 12,
+      paddingHorizontal: 5,
+      backgroundColor: colors.card,
+      borderRadius: 10,
     },
     pickerRowSelected: {
       backgroundColor: colors.primary + "20",
+      borderColor: colors.primary,
+      borderWidth: 1.5,
     },
     pickerRowText: {
       fontSize: 16,
       color: colors.text,
       fontWeight: "500",
-      flex: 1,
     },
     pickerSubtitleText: {
       fontSize: 14,
@@ -2413,6 +2661,8 @@ const getStyles = (scheme: "light" | "dark") => {
       borderColor: colors.border,
       justifyContent: "center",
       alignItems: "center",
+      marginLeft: 10,
+      marginRight: 5,
     },
     pickerCheckboxSelected: {
       backgroundColor: colors.primary,
@@ -2471,7 +2721,6 @@ const getStyles = (scheme: "light" | "dark") => {
       fontWeight: "600",
     },
     filterButtonsGroup: {
-      marginHorizontal: 20,
       marginBottom: 10,
       backgroundColor: colors.card,
       borderRadius: 12,
@@ -2495,17 +2744,16 @@ const getStyles = (scheme: "light" | "dark") => {
     },
     modalFilterContainer: {
       paddingBottom: 5,
+      marginTop: 20,
     },
     listHeaderContainer: {
       flexDirection: "row",
       justifyContent: "space-between",
       alignItems: "center",
-      paddingHorizontal: 20,
-      marginTop: 20,
       marginBottom: 10,
     },
     subtleTitle: {
-      fontSize: 18,
+      fontSize: 16,
       fontWeight: "bold",
       color: colors.subtleText,
     },
