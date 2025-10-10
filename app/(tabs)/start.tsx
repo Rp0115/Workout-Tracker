@@ -2,6 +2,11 @@
  * @file start.tsx
  * @description This file contains the WorkoutSessionScreen, which is the central hub for starting and tracking workouts.
  *
+ * --- CONTEXT INTEGRATION ---
+ * - This screen now uses the `useWorkout` hook to access the global workout state.
+ * - When a user starts a workout (`handleStartPlan`), it calls `startWorkout(plan)` from the context. This sets the global state and makes the minimized view appear on other tabs.
+ * - When a workout is finished or cancelled (`finishWorkout`), it calls `stopWorkout()` to clear the global state and hide the minimized view.
+ *
  * --- COMPONENT & MODAL OVERVIEW ---
  *
  * 1.  WorkoutSessionScreen (Main Component):
@@ -96,6 +101,7 @@ import {
 } from "react-native-safe-area-context";
 
 import { useAuth } from "../../context/AuthContext";
+import { useWorkout } from "../../context/WorkoutContext"; // Import the workout context hook
 import exercises from "../../exercises.json"; // Import exercise data
 import { db } from "../../firebaseConfig";
 
@@ -1516,10 +1522,11 @@ export default function WorkoutSessionScreen() {
   const colors = Colors[useColorScheme() ?? "light"];
   const router = useRouter();
 
+  const { startWorkout, stopWorkout, activeWorkout } = useWorkout();
+
   const [isLoading, setIsLoading] = useState(true);
   const [allPlans, setAllPlans] = useState<WorkoutPlan[]>([]);
   const [recentWorkouts, setRecentWorkouts] = useState<WorkoutHistory[]>([]);
-  const [activePlan, setActivePlan] = useState<WorkoutPlan | null>(null);
   const [isPlanSelectorVisible, setIsPlanSelectorVisible] = useState(false);
   const [previewPlan, setPreviewPlan] = useState<WorkoutPlan | null>(null);
   const [isPreviewModalVisible, setIsPreviewModalVisible] = useState(false);
@@ -1668,7 +1675,7 @@ export default function WorkoutSessionScreen() {
 
   const handleStartPlan = (plan: WorkoutPlan) => {
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-    setActivePlan(plan);
+    startWorkout(plan); // Use context to start workout
     setIsPlanSelectorVisible(false);
     setIsPreviewModalVisible(false);
   };
@@ -1806,7 +1813,7 @@ export default function WorkoutSessionScreen() {
         "Your workout was not saved because no sets were completed."
       );
       LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-      setActivePlan(null);
+      stopWorkout(); // Use context to stop workout
       return;
     }
 
@@ -1844,7 +1851,7 @@ export default function WorkoutSessionScreen() {
       }
 
       LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-      setActivePlan(null);
+      stopWorkout(); // Use context to stop workout
     };
 
     if (planToFinish.id.startsWith("quick-start")) {
@@ -1906,8 +1913,8 @@ export default function WorkoutSessionScreen() {
       return;
     }
 
-    if (activePlan) {
-      await finishWorkout(activePlan, updatedData, duration);
+    if (activeWorkout) {
+      await finishWorkout(activeWorkout as WorkoutPlan, updatedData, duration);
     }
   };
 
@@ -1943,9 +1950,9 @@ export default function WorkoutSessionScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
-      {activePlan ? (
+      {activeWorkout ? (
         <ActiveWorkoutView
-          plan={activePlan}
+          plan={activeWorkout as WorkoutPlan} // Cast here as we know it's active
           onFinish={finishWorkout}
           onUpdateAndFinish={handleUpdateAndFinish}
           onViewExerciseDetails={handleViewExerciseDetails}
