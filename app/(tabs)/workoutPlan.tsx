@@ -9,31 +9,34 @@
  * - Manages the state for all workout plans.
  * - Fetches plans from Firebase and handles loading states.
  * - Toggles between a plan carousel view and a drag-and-drop reordering view.
- * - **New**: Can receive exercise data via route params to pre-fill the "New Plan" modal.
+ * - Can receive exercise data via route params to pre-fill the "New Plan" modal.
  *
  * 2.  PlanCard:
  * - A large, visually appealing card that displays a summary of a single workout plan in the main carousel view.
  *
  * 3.  PlanModal:
  * - A full-screen modal for creating a new workout plan or editing an existing one.
- * - Contains fields for plan name, description, and schedule (days of the week).
+ * - Contains fields for plan icon (emoji), name, description, and schedule.
  * - Manages a list of exercises within the plan, allowing users to add, delete, and reorder them using a `DraggableFlatList`.
  *
- * 4.  ExerciseLibraryModal (Unified Component):
+ * 4.  EmojiPickerModal (New Component):
+ * - A new modal that opens from `PlanModal` to allow emoji selection.
+ *
+ * 5.  ExerciseLibraryModal (Unified Component):
  * - A single, reusable modal for browsing and selecting exercises from the library.
  * - Operates in two modes controlled by a `mode` prop:
  * - `mode='explore'`: A read-only version for browsing the library.
  * - `mode='pick'`: A multi-select version for adding exercises to a plan.
  *
- * 5.  ExerciseDetailModal:
+ * 6.  ExerciseDetailModal:
  * - Displays detailed information about a single exercise (muscles, instructions, etc.).
  * - Triggered from the `ExerciseLibraryModal`.
  *
- * 6.  MuscleSelectionModal:
+ * 7.  MuscleSelectionModal:
  * - A small modal that opens from within the `PlanModal` when a user adds a custom (blank) exercise.
  * - Allows the user to assign primary muscle groups to their custom exercise.
  *
- * 7.  ExerciseFilter & FilterSelectionModal:
+ * 8.  ExerciseFilter & FilterSelectionModal:
  * - Reusable components that build the advanced filtering UI within the `ExerciseLibraryModal`.
  *
  * --- FIREBASE INTEGRATION ---
@@ -41,7 +44,7 @@
  * This screen interacts with one main Firestore collection under the user's UID (`/users/{uid}/`):
  *
  * 1.  `workoutPlans` collection:
- * - `fetchWorkoutPlans`: Reads all documents from this collection to display on the main screen. Documents are sorted by an `order` field.
+ * - **MODIFIED**: `fetchWorkoutPlans`: Now explicitly maps all fields from Firestore to the `WorkoutPlan` type, guaranteeing that `workouts` and `primaryMuscles` arrays are always correctly loaded, even if they were missing or null in the database.
  * - `handleSavePlan`:
  * - If editing, it uses `updateDoc` to save changes to an existing plan document.
  * - If creating, it uses `addDoc` to create a new plan document. It also calculates and assigns the correct `order` number.
@@ -181,6 +184,47 @@ const CARD_WIDTH = screenWidth * 0.75;
 const CARD_HEIGHT = CARD_WIDTH * 1.25;
 const CARD_MARGIN = (screenWidth - CARD_WIDTH) / 8;
 const SNAP_INTERVAL = CARD_WIDTH + CARD_MARGIN * 2;
+
+// --- NEW EMOJI LIST ---
+const EMOJI_LIST = [
+  "💪",
+  "🏋️",
+  "⚡️",
+  "🔥",
+  "🎯",
+  "🏆",
+  "🥇",
+  "🚀",
+  "💯",
+  "✅",
+  "🧠",
+  "🧘",
+  "🚴",
+  "🤸",
+  "🤸‍♂️",
+  "🤸‍♀️",
+  "🏃",
+  "🏃‍♀️",
+  "🏃‍♂️",
+  "🤾",
+  "🤾‍♂️",
+  "🤾‍♀️",
+  "🧗",
+  "🧗‍♂️",
+  "🧗‍♀️",
+  "❤️",
+  "🧡",
+  "💛",
+  "💚",
+  "💙",
+  "💜",
+  "⭐️",
+  "🌟",
+  "🍎",
+  "🥦",
+  "🥑",
+  "👟",
+];
 
 // =================================================================================================
 // --- REUSABLE FILTER COMPONENTS ---
@@ -435,6 +479,62 @@ const ExerciseFilter: React.FC<ExerciseFilterProps> = ({
 // =================================================================================================
 // --- MODAL COMPONENTS ---
 // =================================================================================================
+
+// --- NEW EMOJI PICKER MODAL ---
+interface EmojiPickerModalProps {
+  visible: boolean;
+  onClose: () => void;
+  onSelect: (emoji: string) => void;
+}
+
+const EmojiPickerModal: React.FC<EmojiPickerModalProps> = ({
+  visible,
+  onClose,
+  onSelect,
+}) => {
+  const styles = getStyles(useColorScheme() ?? "light");
+  const insets = useSafeAreaInsets();
+  return (
+    <Modal
+      visible={visible}
+      animationType="fade"
+      transparent={true}
+      onRequestClose={onClose}
+    >
+      <TouchableOpacity
+        style={styles.miniModalOverlay}
+        activeOpacity={1}
+        onPress={onClose}
+      >
+        <TouchableOpacity
+          style={[
+            styles.emojiPickerContainer,
+            { paddingBottom: insets.bottom + 10 },
+          ]}
+          activeOpacity={1}
+          onPress={(e) => e.stopPropagation()}
+        >
+          <Text style={styles.emojiPickerTitle}>Select an Icon</Text>
+          <FlatList
+            data={EMOJI_LIST}
+            keyExtractor={(item) => item}
+            numColumns={8}
+            contentContainerStyle={styles.emojiPickerGrid}
+            renderItem={({ item }) => (
+              <TouchableOpacity
+                style={styles.emojiButton}
+                onPress={() => onSelect(item)}
+              >
+                <Text style={styles.emojiText}>{item}</Text>
+              </TouchableOpacity>
+            )}
+          />
+        </TouchableOpacity>
+      </TouchableOpacity>
+    </Modal>
+  );
+};
+// --- END EMOJI PICKER MODAL ---
 
 interface MuscleSelectionModalProps {
   visible: boolean;
@@ -929,17 +1029,20 @@ const PlanModal: React.FC<PlanModalProps> = ({
   const insets = useSafeAreaInsets();
   const isEditing = !!initialPlan?.id;
 
+  const [icon, setIcon] = useState("💪");
   const [planName, setPlanName] = useState("");
   const [description, setDescription] = useState("");
   const [selectedDays, setSelectedDays] = useState<string[]>([]);
   const [workouts, setWorkouts] = useState<Workout[]>([]);
   const [isPickerVisible, setIsPickerVisible] = useState(false);
+  const [isEmojiPickerVisible, setIsEmojiPickerVisible] = useState(false);
   const [editingMusclesFor, setEditingMusclesFor] = useState<Workout | null>(
     null
   );
 
   useEffect(() => {
     if (visible) {
+      setIcon(initialPlan?.icon || "💪");
       setPlanName(initialPlan?.planName || "");
       setDescription(initialPlan?.description || "");
       setSelectedDays(initialPlan?.selectedDays || []);
@@ -998,6 +1101,11 @@ const PlanModal: React.FC<PlanModalProps> = ({
     setWorkouts((prev) => [...prev, ...newWorkouts]);
   };
 
+  const handleSelectEmoji = (selectedEmoji: string) => {
+    setIcon(selectedEmoji);
+    setIsEmojiPickerVisible(false);
+  };
+
   const handleUpdateWorkoutMuscles = (muscles: string[]) => {
     if (editingMusclesFor === null) return;
     const index = workouts.findIndex((w) => w.id === editingMusclesFor.id);
@@ -1038,7 +1146,7 @@ const PlanModal: React.FC<PlanModalProps> = ({
       workouts: workoutsToSave,
       primaryMuscleGroups,
       order: initialPlan?.order ?? 0,
-      icon: initialPlan?.icon || "💪",
+      icon: icon,
     };
     onSave(planData);
   };
@@ -1058,6 +1166,11 @@ const PlanModal: React.FC<PlanModalProps> = ({
         options={exerciseData.muscleGroups}
         initialSelection={editingMusclesFor?.primaryMuscles || []}
         onSave={handleUpdateWorkoutMuscles}
+      />
+      <EmojiPickerModal
+        visible={isEmojiPickerVisible}
+        onClose={() => setIsEmojiPickerVisible(false)}
+        onSelect={handleSelectEmoji}
       />
       <GestureHandlerRootView style={{ flex: 1 }}>
         <View style={[styles.newModalContainer, { paddingTop: insets.top }]}>
@@ -1103,13 +1216,25 @@ const PlanModal: React.FC<PlanModalProps> = ({
                 <View style={styles.newSectionContainer}>
                   <Text style={styles.newSectionTitle}>Details</Text>
                   <View style={styles.newInputGroup}>
-                    <TextInput
-                      style={styles.newTextInput}
-                      placeholder="Plan Name (e.g., Upper Body)"
-                      placeholderTextColor={colors.subtleText}
-                      value={planName}
-                      onChangeText={setPlanName}
-                    />
+                    <View style={styles.iconAndNameRow}>
+                      <TouchableOpacity
+                        style={styles.iconPickerButton}
+                        onPress={() => setIsEmojiPickerVisible(true)}
+                      >
+                        <Text style={styles.iconPickerEmoji}>{icon}</Text>
+                      </TouchableOpacity>
+                      <View style={styles.verticalDivider} />
+                      <TextInput
+                        style={[
+                          styles.newTextInput,
+                          { flex: 1, paddingLeft: 0 },
+                        ]}
+                        placeholder="Plan Name (e.g., Upper Body)"
+                        placeholderTextColor={colors.subtleText}
+                        value={planName}
+                        onChangeText={setPlanName}
+                      />
+                    </View>
                     <View style={styles.newDivider} />
                     <TextInput
                       style={[
@@ -1362,6 +1487,7 @@ export default function WorkoutPlanScreen() {
             workouts: passedWorkouts,
             selectedDays: [],
             order: savedPlans.length,
+            icon: "💪", // Default icon
           };
           setEditingPlan(prefilledPlan as any); // Cast because `id` is missing
           setIsModalVisible(true);
@@ -1442,6 +1568,9 @@ export default function WorkoutPlanScreen() {
     return collection(db, "users", user.uid, "workoutPlans");
   }, [user]);
 
+  // --- MODIFIED: fetchWorkoutPlans ---
+  // This now explicitly maps the data to ensure fields like `primaryMuscles`
+  // are always present, even if they are just an empty array.
   const fetchWorkoutPlans = useCallback(async () => {
     if (!plansCollectionRef) {
       return;
@@ -1449,13 +1578,34 @@ export default function WorkoutPlanScreen() {
     try {
       const querySnapshot = await getDocs(plansCollectionRef);
       const plans = querySnapshot.docs
-        .map((doc) => ({ id: doc.id, ...doc.data() } as WorkoutPlan))
+        .map((doc) => {
+          const data = doc.data();
+          // Explicitly map fields to match the WorkoutPlan interface
+          const plan: WorkoutPlan = {
+            id: doc.id,
+            planName: data.planName || "",
+            description: data.description || "",
+            selectedDays: data.selectedDays || [],
+            primaryMuscleGroups: data.primaryMuscleGroups || [],
+            order: data.order !== undefined ? data.order : 0,
+            icon: data.icon || "💪", // Default icon if not set
+            // Explicitly map workouts to ensure primaryMuscles exists
+            workouts: (data.workouts || []).map((w: any) => ({
+              name: w.name || "",
+              sets: w.sets || "",
+              reps: w.reps || "",
+              primaryMuscles: w.primaryMuscles || [], // <-- This is the fix
+            })),
+          };
+          return plan;
+        })
         .sort((a, b) => a.order - b.order);
       setSavedPlans(plans);
     } catch (error) {
       console.error("Error fetching workout plans: ", error);
     }
   }, [plansCollectionRef]);
+  // --- END OF MODIFICATION ---
 
   useEffect(() => {
     const initialLoad = async () => {
@@ -1798,6 +1948,70 @@ export default function WorkoutPlanScreen() {
 const getStyles = (scheme: "light" | "dark") => {
   const colors = Colors[scheme];
   return StyleSheet.create({
+    // --- NEW Emoji Picker Styles ---
+    emojiPickerContainer: {
+      backgroundColor: colors.card,
+      borderRadius: 20,
+      padding: 10,
+      width: "90%",
+      maxHeight: "50%",
+      shadowColor: "#000",
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.25,
+      shadowRadius: 4,
+      elevation: 5,
+    },
+    emojiPickerTitle: {
+      fontSize: 18,
+      fontWeight: "bold",
+      color: colors.text,
+      textAlign: "center",
+      paddingVertical: 10,
+    },
+    emojiPickerGrid: {
+      alignItems: "center",
+      paddingBottom: 10,
+    },
+    emojiButton: {
+      width: 40,
+      height: 40,
+      justifyContent: "center",
+      alignItems: "center",
+      margin: 2,
+    },
+    emojiText: {
+      fontSize: 28,
+    },
+    // --- MODIFIED PlanModal Styles ---
+    newInputGroup: {
+      backgroundColor: colors.card,
+      borderRadius: 12,
+      marginHorizontal: 20,
+    },
+    iconAndNameRow: {
+      flexDirection: "row",
+      alignItems: "center",
+    },
+    iconPickerButton: {
+      padding: 15,
+      justifyContent: "center",
+      alignItems: "center",
+    },
+    iconPickerEmoji: {
+      fontSize: 24,
+    },
+    verticalDivider: {
+      width: 1,
+      height: "60%",
+      backgroundColor: colors.border,
+    },
+    newTextInput: {
+      fontSize: 16,
+      color: colors.text,
+      padding: 15,
+    },
+    // --- End Modified Styles ---
+
     // New Filter Styles
     miniModalOverlay: {
       flex: 1,
@@ -2114,12 +2328,6 @@ const getStyles = (scheme: "light" | "dark") => {
       marginBottom: 12,
       paddingHorizontal: 20,
     },
-    newInputGroup: {
-      backgroundColor: colors.card,
-      borderRadius: 12,
-      marginHorizontal: 20,
-    },
-    newTextInput: { fontSize: 16, color: colors.text, padding: 15 },
     newDivider: {
       height: 1,
       backgroundColor: colors.border,
