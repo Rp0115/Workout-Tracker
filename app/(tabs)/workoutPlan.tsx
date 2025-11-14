@@ -74,6 +74,7 @@ import {
   Animated,
   Dimensions,
   Modal,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
@@ -1271,11 +1272,11 @@ const PlanCard: React.FC<PlanCardProps> = ({ item, onPress, onLongPress }) => {
                     >
                       {workout.name}
                     </Text>
-                    {workout.sets && workout.reps && (
+                    {workout.sets && workout.reps ? (
                       <Text style={styles.cardWorkoutListItemSetsReps}>
                         {workout.sets}x{workout.reps}
                       </Text>
-                    )}
+                    ) : null}
                   </View>
                 ))}
               </View>
@@ -1342,6 +1343,7 @@ export default function WorkoutPlanScreen() {
   const router = useRouter();
 
   const [isLoading, setIsLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [savedPlans, setSavedPlans] = useState<WorkoutPlan[]>([]);
   const [originalOrder, setOriginalOrder] = useState<WorkoutPlan[]>([]);
   const [isModalVisible, setIsModalVisible] = useState(false);
@@ -1442,10 +1444,8 @@ export default function WorkoutPlanScreen() {
 
   const fetchWorkoutPlans = useCallback(async () => {
     if (!plansCollectionRef) {
-      setIsLoading(false);
       return;
     }
-    setIsLoading(true);
     try {
       const querySnapshot = await getDocs(plansCollectionRef);
       const plans = querySnapshot.docs
@@ -1454,13 +1454,26 @@ export default function WorkoutPlanScreen() {
       setSavedPlans(plans);
     } catch (error) {
       console.error("Error fetching workout plans: ", error);
-    } finally {
-      setIsLoading(false);
     }
   }, [plansCollectionRef]);
 
   useEffect(() => {
-    fetchWorkoutPlans();
+    const initialLoad = async () => {
+      setIsLoading(true);
+      await fetchWorkoutPlans();
+      setIsLoading(false);
+    };
+    if (user) {
+      initialLoad();
+    } else {
+      setIsLoading(false);
+    }
+  }, [user, fetchWorkoutPlans]);
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await fetchWorkoutPlans();
+    setRefreshing(false);
   }, [fetchWorkoutPlans]);
 
   const handleEnterReorderMode = () => {
@@ -1611,7 +1624,16 @@ export default function WorkoutPlanScreen() {
   return (
     <SafeAreaView style={styles.container}>
       <GestureHandlerRootView style={{ flex: 1 }}>
-        <ScrollView contentContainerStyle={styles.scrollContentContainer}>
+        <ScrollView
+          contentContainerStyle={styles.scrollContentContainer}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              tintColor={colors.primary}
+            />
+          }
+        >
           <Text style={styles.pageTitle}>My Workout Plans</Text>
           <Animated.View style={carouselAnimatedStyle}>
             {savedPlans.length > 0 ? (
@@ -1740,6 +1762,12 @@ export default function WorkoutPlanScreen() {
               )}
               ListFooterComponent={
                 <View style={styles.doneButtonContainer}>
+                  <TouchableOpacity
+                    style={styles.doneButton}
+                    onPress={handleDoneReordering}
+                  >
+                    <Text style={styles.doneButtonText}>Done</Text>
+                  </TouchableOpacity>
                   <Animated.View style={[revertButtonAnimatedStyle]}>
                     <TouchableOpacity
                       style={styles.revertButton}
@@ -1754,12 +1782,6 @@ export default function WorkoutPlanScreen() {
                       <Text style={styles.revertButtonText}>Revert</Text>
                     </TouchableOpacity>
                   </Animated.View>
-                  <TouchableOpacity
-                    style={styles.doneButton}
-                    onPress={handleDoneReordering}
-                  >
-                    <Text style={styles.doneButtonText}>Done</Text>
-                  </TouchableOpacity>
                 </View>
               }
             />
@@ -2395,20 +2417,21 @@ const getStyles = (scheme: "light" | "dark") => {
     },
     doneButtonContainer: {
       marginTop: 20,
-      flexDirection: "row",
-      justifyContent: "center",
+      paddingHorizontal: 20,
       alignItems: "center",
     },
     doneButton: {
       backgroundColor: colors.primary,
       paddingVertical: 14,
-      paddingHorizontal: 50,
       borderRadius: 28,
       shadowColor: "#000",
       shadowOffset: { width: 0, height: 4 },
       shadowOpacity: 0.3,
       shadowRadius: 4,
       elevation: 8,
+      width: "100%",
+      alignItems: "center",
+      marginBottom: 15,
     },
     doneButtonText: { color: "white", fontSize: 18, fontWeight: "bold" },
     revertButton: {
@@ -2417,7 +2440,6 @@ const getStyles = (scheme: "light" | "dark") => {
       flexDirection: "row",
       alignItems: "center",
       gap: 8,
-      marginRight: 20,
     },
     revertButtonText: {
       color: colors.subtleText,

@@ -24,6 +24,7 @@ import {
 import React, { useCallback, useEffect, useState } from "react";
 import {
   ActivityIndicator,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
@@ -91,12 +92,12 @@ export default function TestScreen() {
   const colors = Colors[colorScheme];
 
   const [isLoading, setIsLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [workoutData, setWorkoutData] = useState<WorkoutHistory[]>([]);
   const [activeTab, setActiveTab] = useState("Weekly");
 
   const fetchWorkoutHistory = useCallback(async () => {
     if (!user) {
-      setIsLoading(false);
       return;
     }
 
@@ -132,13 +133,27 @@ export default function TestScreen() {
       setWorkoutData(combinedHistory);
     } catch (error) {
       console.error("Error fetching workout history:", error);
-    } finally {
-      setIsLoading(false);
     }
   }, [user]);
 
   useEffect(() => {
-    fetchWorkoutHistory();
+    const initialLoad = async () => {
+      setIsLoading(true);
+      await fetchWorkoutHistory();
+      setIsLoading(false);
+    };
+
+    if (user) {
+      initialLoad();
+    } else {
+      setIsLoading(false);
+    }
+  }, [fetchWorkoutHistory, user]);
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await fetchWorkoutHistory();
+    setRefreshing(false);
   }, [fetchWorkoutHistory]);
 
   // --- DATA PROCESSING ---
@@ -255,22 +270,42 @@ export default function TestScreen() {
   if (!processedData) {
     return (
       <SafeAreaView style={styles.container}>
-        <View style={styles.header}>
-          <Text style={styles.title}>Analytics</Text>
-        </View>
-        <View style={styles.center}>
-          <Text style={styles.emptyText}>No workout data yet.</Text>
-          <Text style={styles.emptySubText}>
-            Complete a workout to see your stats!
-          </Text>
-        </View>
+        <ScrollView
+          contentContainerStyle={{ flex: 1 }}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              tintColor={colors.primary}
+            />
+          }
+        >
+          <View style={styles.header}>
+            <Text style={styles.title}>Analytics</Text>
+          </View>
+          <View style={styles.center}>
+            <Text style={styles.emptyText}>No workout data yet.</Text>
+            <Text style={styles.emptySubText}>
+              Complete a workout to see your stats!
+            </Text>
+          </View>
+        </ScrollView>
       </SafeAreaView>
     );
   }
 
   return (
     <SafeAreaView style={styles.container}>
-      <ScrollView contentContainerStyle={styles.scrollContainer}>
+      <ScrollView
+        contentContainerStyle={styles.scrollContainer}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={colors.primary}
+          />
+        }
+      >
         <View style={styles.header}>
           <Text style={styles.title}>Analytics</Text>
           <Text style={styles.subtitle}>Your progress at a glance</Text>
