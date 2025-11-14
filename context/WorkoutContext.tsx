@@ -4,7 +4,10 @@
  *
  * --- CONTEXT & PROVIDER ---
  * 1. WorkoutContext: The React context that will hold the active workout's state.
- * 2. WorkoutProvider: A component that wraps the application to provide the workout state to all its children. It manages the 'activeWorkout' state and provides functions to start and stop a workout.
+ * 2. WorkoutProvider: A component that wraps the application to provide the workout state to all its children.
+ * - Manages the 'activeWorkout' state.
+ * - Provides `startWorkout` which now transforms the incoming plan to ensure `sets` is a number.
+ * - Provides `stopWorkout` to clear the session.
  *
  * --- COMPONENTS ---
  * 1. MinimizedWorkoutView: A small, floating component that appears on screen when a workout is active.
@@ -36,16 +39,51 @@ import {
 } from "react-native";
 
 // --- TYPE DEFINITIONS ---
+
+// Input types: The plan object that can be passed to startWorkout.
+// This is flexible and allows 'sets' to be a string (from index.tsx) or a number.
+interface InputWorkout {
+  name: string;
+  sets: string | number;
+  reps: string;
+  primaryMuscles?: string[];
+}
+
+interface InputWorkoutPlan {
+  id: string;
+  planName: string;
+  description?: string;
+  selectedDays?: string[];
+  workouts: InputWorkout[];
+  primaryMuscleGroups?: string[];
+  order?: number;
+  icon?: string;
+}
+
+// Internal types: The format used *within* the context and expected by start.tsx.
+// 'sets' is guaranteed to be a number.
+interface ActiveWorkout {
+  name: string;
+  sets: number;
+  reps: string;
+  primaryMuscles?: string[];
+}
+
 interface WorkoutPlan {
   id: string;
   planName: string;
+  description?: string;
+  selectedDays?: string[];
+  workouts: ActiveWorkout[];
+  primaryMuscleGroups?: string[];
+  order?: number;
   icon?: string;
 }
 
 interface WorkoutContextType {
   activeWorkout: WorkoutPlan | null;
   isWorkoutActive: boolean;
-  startWorkout: (plan: WorkoutPlan) => void;
+  startWorkout: (plan: InputWorkoutPlan) => void; // Takes the flexible input type
   stopWorkout: () => void;
 }
 
@@ -239,8 +277,18 @@ export const WorkoutProvider: React.FC<{ children: ReactNode }> = ({
 }) => {
   const [activeWorkout, setActiveWorkout] = useState<WorkoutPlan | null>(null);
 
-  const startWorkout = (plan: WorkoutPlan) => {
-    setActiveWorkout(plan);
+  // --- UPDATED FUNCTION ---
+  const startWorkout = (plan: InputWorkoutPlan) => {
+    // Transform the plan to the internal format
+    const transformedPlan: WorkoutPlan = {
+      ...plan,
+      workouts: plan.workouts.map((w) => ({
+        ...w,
+        // Ensure 'sets' is a number, converting from string if necessary
+        sets: parseInt(String(w.sets), 10) || 0,
+      })),
+    };
+    setActiveWorkout(transformedPlan);
   };
 
   const stopWorkout = () => {

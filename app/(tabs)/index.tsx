@@ -23,7 +23,7 @@
  * - `fetchUserData`: Reads all documents from `/users/{uid}/workoutPlans` to determine if there is a plan scheduled for the current day of the week.
  */
 import { Feather } from "@expo/vector-icons";
-import { Link } from "expo-router";
+import { Link, useRouter } from "expo-router"; // <-- useRouter is already here
 import { collection, doc, getDoc, getDocs } from "firebase/firestore";
 import React, {
   useCallback,
@@ -46,6 +46,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { useAuth } from "../../context/AuthContext";
+// import { useWorkout } from "../../context/WorkoutContext"; // <-- No longer needed here
 import { db } from "../../firebaseConfig";
 
 // --- UNIFIED COLOR PALETTE ---
@@ -218,7 +219,14 @@ const WorkoutItem = ({ item, isLast }: { item: Workout; isLast: boolean }) => {
   );
 };
 
-const TodaysWorkoutCard = ({ plan }: { plan: WorkoutPlan }) => {
+// --- MODIFIED COMPONENT ---
+const TodaysWorkoutCard = ({
+  plan,
+  onBeginSession,
+}: {
+  plan: WorkoutPlan;
+  onBeginSession: (plan: WorkoutPlan) => void; // Prop signature is the same
+}) => {
   const styles = getStyles(useColorScheme() ?? "light");
 
   return (
@@ -245,15 +253,18 @@ const TodaysWorkoutCard = ({ plan }: { plan: WorkoutPlan }) => {
         ))}
       </View>
 
-      <Link href="/(tabs)/start" asChild>
-        <TouchableOpacity style={styles.primaryButton}>
-          <Feather name="play" size={20} color="#FFFFFF" />
-          <Text style={styles.primaryButtonText}>Begin Session</Text>
-        </TouchableOpacity>
-      </Link>
+      {/* This TouchableOpacity now uses the new `handleBeginSession` from the parent */}
+      <TouchableOpacity
+        style={styles.primaryButton}
+        onPress={() => onBeginSession(plan)}
+      >
+        <Feather name="play" size={20} color="#FFFFFF" />
+        <Text style={styles.primaryButtonText}>Begin Session</Text>
+      </TouchableOpacity>
     </View>
   );
 };
+// --- END OF MODIFIED COMPONENT ---
 
 const RestDayCard = () => {
   const styles = getStyles(useColorScheme() ?? "light");
@@ -342,6 +353,9 @@ export default function IndexScreen() {
   const styles = getStyles(useColorScheme() ?? "light");
   const colors = Colors[useColorScheme() ?? "light"];
 
+  const router = useRouter();
+  // const { startWorkout } = useWorkout(); // <-- Removed
+
   const [isLoading, setIsLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [plans, setPlans] = useState<WorkoutPlan[]>([]);
@@ -406,6 +420,17 @@ export default function IndexScreen() {
     return plans.find((plan) => plan.selectedDays.includes(todayShort)) || null;
   }, [plans]);
 
+  // --- UPDATED HANDLER ---
+  const handleBeginSession = (plan: WorkoutPlan) => {
+    // We no longer start the workout here.
+    // We just navigate to the 'start' tab and pass the plan ID as a param.
+    router.push({
+      pathname: "/(tabs)/start",
+      params: { previewPlanId: plan.id },
+    });
+  };
+  // --- END OF UPDATED HANDLER ---
+
   if (isLoading) {
     return <LoadingSkeleton />;
   }
@@ -445,7 +470,11 @@ export default function IndexScreen() {
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Today's Agenda</Text>
           {todaysPlan ? (
-            <TodaysWorkoutCard plan={todaysPlan} />
+            // --- Pass the new handler to the component ---
+            <TodaysWorkoutCard
+              plan={todaysPlan}
+              onBeginSession={handleBeginSession}
+            />
           ) : (
             <RestDayCard />
           )}

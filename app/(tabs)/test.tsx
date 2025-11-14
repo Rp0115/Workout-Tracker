@@ -5,12 +5,13 @@
  * --- FEATURES ---
  * 1.  Data Fetching: On component mount, it fetches all workout history from both the `workoutHistory` and `workoutQuickHistory` Firestore collections.
  * 2.  Data Processing: The fetched data is processed to calculate key metrics:
- * -   Total workouts and total duration.
- * -   Workout frequency for the current week (displayed in a bar chart).
- * -   Strength progression for the most frequently performed exercise (displayed in a line chart).
+ * -   Total workouts and duration (Weekly, Monthly, Yearly).
+ * -   Bar chart and Line Chart horizontal rules no longer overflow.
+ * -   Strength progression for the most frequently performed exercise.
  * 3.  Visualizations: Uses `react-native-gifted-charts` to render beautiful and interactive charts.
- * 4.  Dynamic Content: Includes a tab-based view to switch between different timeframes for analysis.
+ * 4.  Dynamic Content: The Stat Cards and Bar Chart now update when the "Weekly", "Monthly", or "Yearly" tabs are toggled.
  * 5.  User Feedback: Displays a loading indicator while data is being fetched and an empty state message if no workout history is available.
+ * 6.  Drill-down: Users can tap on a bar in the chart to see a modal with details for that day/month.
  */
 
 import { Feather } from "@expo/vector-icons";
@@ -24,6 +25,8 @@ import {
 import React, { useCallback, useEffect, useState } from "react";
 import {
   ActivityIndicator,
+  Modal,
+  Pressable,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -71,6 +74,7 @@ const Colors = {
 // --- TYPE DEFINITIONS ---
 interface WorkoutHistory {
   id: string;
+  planName?: string;
   completedAt: Timestamp;
   duration: number; // in seconds
   exercises: {
@@ -84,6 +88,86 @@ interface ChartDataPoint {
   label: string;
 }
 
+interface WorkoutDrilldown {
+  name: string;
+  duration: number; // in seconds
+}
+
+interface DayDetail {
+  label: string;
+  workoutCount: number;
+  totalDuration: number; // Total seconds for this day
+  workouts: WorkoutDrilldown[];
+  fullDate: Date; // To display in the modal
+}
+
+interface ChartBar extends DayDetail {
+  value: number; // The dynamic value (in minutes or hours) for the bar height
+}
+
+// --- HELPER FUNCTIONS ---
+const formatDuration = (seconds: number) => {
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) {
+    return `${minutes} min`;
+  }
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  if (remainingMinutes === 0) {
+    return `${hours}h`;
+  }
+  return `${hours}h ${remainingMinutes}m`;
+};
+
+const calculateYAxis = (data: DayDetail[]) => {
+  const maxDurationInSeconds = Math.max(...data.map((d) => d.totalDuration));
+  // Use minutes if max is < 2 hours, otherwise use hours
+  const useMinutes = maxDurationInSeconds < 7200;
+  const yAxisTitle = useMinutes ? "Minutes" : "Hours";
+  const yAxisSuffix = useMinutes ? "m" : "h";
+
+  let maxValue = useMinutes
+    ? maxDurationInSeconds / 60
+    : maxDurationInSeconds / 3600;
+
+  let stepValue: number | undefined;
+
+  if (maxValue === 0) {
+    if (useMinutes) {
+      maxValue = 60;
+      stepValue = 15;
+    } else {
+      maxValue = 2;
+      stepValue = 0.5;
+    }
+  } else if (useMinutes) {
+    maxValue = Math.ceil(maxValue / 15) * 15;
+    stepValue = 15;
+  } else {
+    // For hours
+    maxValue = Math.ceil(maxValue * 2) / 2; // Round up to nearest 0.5
+    stepValue = 0.5;
+  }
+
+  const formatYLabel = (label: string) => {
+    if (useMinutes) {
+      return Math.round(Number(label)).toString();
+    }
+    return Number(label).toFixed(1); // 1 decimal for hours
+  };
+
+  return {
+    useMinutes,
+    yAxisTitle,
+    yAxisSuffix,
+    formatYLabel,
+    maxValue,
+    stepValue,
+    noOfSections: undefined,
+  };
+};
+// --- END HELPER FUNCTIONS ---
+
 // --- MAIN SCREEN ---
 export default function TestScreen() {
   const { user } = useAuth();
@@ -95,6 +179,9 @@ export default function TestScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [workoutData, setWorkoutData] = useState<WorkoutHistory[]>([]);
   const [activeTab, setActiveTab] = useState("Weekly");
+
+  const [isDetailModalVisible, setIsDetailModalVisible] = useState(false);
+  const [selectedDayData, setSelectedDayData] = useState<ChartBar | null>(null);
 
   const fetchWorkoutHistory = useCallback(async () => {
     if (!user) {
@@ -156,42 +243,142 @@ export default function TestScreen() {
     setRefreshing(false);
   }, [fetchWorkoutHistory]);
 
-  // --- DATA PROCESSING ---
+  // --- DATA PROCESSING (HEAVILY MODIFIED) ---
   const processedData = React.useMemo(() => {
     if (workoutData.length === 0) return null;
 
-    // Weekly Frequency
-    const weeklyData: ChartDataPoint[] = [
-      { value: 0, label: "Sun" },
-      { value: 0, label: "Mon" },
-      { value: 0, label: "Tue" },
-      { value: 0, label: "Wed" },
-      { value: 0, label: "Thu" },
-      { value: 0, label: "Fri" },
-      { value: 0, label: "Sat" },
-    ];
     const today = new Date();
+    const currentYear = today.getFullYear();
+    const currentMonth = today.getMonth();
+
+    // --- 1. Weekly Data ---
+    const dayLabels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
     const firstDayOfWeek = new Date(
-      today.setDate(today.getDate() - today.getDay())
+      today.getFullYear(),
+      today.getMonth(),
+      today.getDate() - today.getDay()
     );
     firstDayOfWeek.setHours(0, 0, 0, 0);
 
+    const weeklyData: DayDetail[] = dayLabels.map((label, index) => {
+      const date = new Date(firstDayOfWeek);
+      date.setDate(date.getDate() + index);
+      return {
+        label: label,
+        workoutCount: 0,
+        totalDuration: 0,
+        workouts: [],
+        fullDate: date,
+      };
+    });
+
+    // --- 2. Monthly Data ---
+    const daysInMonth = new Date(currentYear, currentMonth + 1, 0).getDate();
+    const monthlyData: DayDetail[] = Array.from(
+      { length: daysInMonth },
+      (_, i) => {
+        const date = new Date(currentYear, currentMonth, i + 1);
+        return {
+          label: (i + 1).toString(), // Label is "1", "2", ... "31"
+          workoutCount: 0,
+          totalDuration: 0,
+          workouts: [],
+          fullDate: date,
+        };
+      }
+    );
+
+    // --- 3. Yearly Data ---
+    const monthLabels = [
+      "Jan",
+      "Feb",
+      "Mar",
+      "Apr",
+      "May",
+      "Jun",
+      "Jul",
+      "Aug",
+      "Sep",
+      "Oct",
+      "Nov",
+      "Dec",
+    ];
+    const yearlyData: DayDetail[] = monthLabels.map((label, index) => ({
+      label: label,
+      workoutCount: 0,
+      totalDuration: 0,
+      workouts: [],
+      fullDate: new Date(currentYear, index, 1), // Date is just for the modal title
+    }));
+
+    let yearlyTotalWorkouts = 0;
+    let yearlyTotalDurationSeconds = 0;
+
+    // --- 4. Process All Data ---
     workoutData.forEach((workout) => {
       const workoutDate = workout.completedAt.toDate();
+      const workoutName =
+        workout.planName || workout.exercises?.[0]?.name || "Unnamed Workout";
+
+      // Add to Weekly
       if (workoutDate >= firstDayOfWeek) {
         const dayIndex = workoutDate.getDay();
-        weeklyData[dayIndex].value += 1;
+        weeklyData[dayIndex].workoutCount += 1;
+        weeklyData[dayIndex].totalDuration += workout.duration || 0;
+        weeklyData[dayIndex].workouts.push({
+          name: workoutName,
+          duration: workout.duration || 0,
+        });
+      }
+
+      // Add to Monthly
+      if (
+        workoutDate.getMonth() === currentMonth &&
+        workoutDate.getFullYear() === currentYear
+      ) {
+        const dayOfMonth = workoutDate.getDate(); // 1-31
+        monthlyData[dayOfMonth - 1].workoutCount += 1;
+        monthlyData[dayOfMonth - 1].totalDuration += workout.duration || 0;
+        monthlyData[dayOfMonth - 1].workouts.push({
+          name: workoutName,
+          duration: workout.duration || 0,
+        });
+      }
+
+      // Add to Yearly
+      if (workoutDate.getFullYear() === currentYear) {
+        const monthIndex = workoutDate.getMonth();
+        yearlyData[monthIndex].workoutCount += 1;
+        yearlyData[monthIndex].totalDuration += workout.duration || 0;
+        yearlyData[monthIndex].workouts.push({
+          name: workoutName,
+          duration: workout.duration || 0,
+        });
+        // Also add to yearly totals
+        yearlyTotalWorkouts += 1;
+        yearlyTotalDurationSeconds += workout.duration || 0;
       }
     });
 
-    // Total Stats
-    const totalWorkouts = workoutData.length;
-    const totalDurationMinutes = Math.round(
-      workoutData.reduce((sum, workout) => sum + (workout.duration || 0), 0) /
-        60
+    // --- 5. Calculate Tab-Specific Totals ---
+    const weeklyTotalWorkouts = weeklyData.reduce(
+      (sum, day) => sum + day.workoutCount,
+      0
+    );
+    const weeklyTotalDurationSeconds = weeklyData.reduce(
+      (sum, day) => sum + day.totalDuration,
+      0
+    );
+    const monthlyTotalWorkouts = monthlyData.reduce(
+      (sum, day) => sum + day.workoutCount,
+      0
+    );
+    const monthlyTotalDurationSeconds = monthlyData.reduce(
+      (sum, day) => sum + day.totalDuration,
+      0
     );
 
-    // Exercise Progression
+    // --- 6. Exercise Progression (All Time) ---
     const exerciseCounts: { [key: string]: number } = {};
     workoutData.forEach((workout) => {
       (workout.exercises || []).forEach((ex) => {
@@ -236,27 +423,20 @@ export default function TestScreen() {
 
     return {
       weeklyData,
-      totalWorkouts,
-      totalDurationMinutes,
+      monthlyData,
+      yearlyData,
+
+      weeklyTotalWorkouts,
+      weeklyTotalDurationSeconds,
+      monthlyTotalWorkouts,
+      monthlyTotalDurationSeconds,
+      yearlyTotalWorkouts,
+      yearlyTotalDurationSeconds,
+
       progressionData,
       mostFrequentExercise,
     };
   }, [workoutData]);
-
-  const customDataPoint = () => {
-    return (
-      <View
-        style={{
-          width: 14,
-          height: 14,
-          backgroundColor: colors.chartPoint,
-          borderWidth: 3,
-          borderRadius: 7,
-          borderColor: colors.chartPointBorder,
-        }}
-      />
-    );
-  };
 
   // --- RENDER ---
   if (isLoading) {
@@ -294,6 +474,87 @@ export default function TestScreen() {
     );
   }
 
+  // --- DYNAMIC DATA PREPARATION ---
+
+  // 1. Determine which data to show
+  let activeDayData: DayDetail[];
+  let barWidth = 25;
+  let spacing = 10;
+  let chartTitle = "Weekly";
+
+  if (activeTab === "Weekly") {
+    activeDayData = processedData.weeklyData;
+    barWidth = 25;
+    spacing = 10;
+    chartTitle = "Weekly";
+  } else if (activeTab === "Monthly") {
+    activeDayData = processedData.monthlyData;
+    barWidth = 12;
+    spacing = 15;
+    chartTitle = "Monthly";
+  } else {
+    // Yearly
+    activeDayData = processedData.yearlyData;
+    barWidth = 18;
+    spacing = 12;
+    chartTitle = "Yearly";
+  }
+
+  // 2. Get Y-Axis properties based on that data
+  const yAxisProps = calculateYAxis(activeDayData);
+
+  // 3. Create the final chart data with the correct 'value'
+  const finalChartData = activeDayData.map((day) => ({
+    ...day,
+    value: yAxisProps.useMinutes
+      ? day.totalDuration / 60
+      : day.totalDuration / 3600,
+  }));
+
+  // 4. Determine Stat Card values
+  let displayTotalWorkouts = 0;
+  let displayTotalDurationMinutes = 0;
+
+  if (activeTab === "Weekly") {
+    displayTotalWorkouts = processedData.weeklyTotalWorkouts;
+    displayTotalDurationMinutes = Math.round(
+      processedData.weeklyTotalDurationSeconds / 60
+    );
+  } else if (activeTab === "Monthly") {
+    displayTotalWorkouts = processedData.monthlyTotalWorkouts;
+    displayTotalDurationMinutes = Math.round(
+      processedData.monthlyTotalDurationSeconds / 60
+    );
+  } else {
+    // Yearly
+    displayTotalWorkouts = processedData.yearlyTotalWorkouts;
+    displayTotalDurationMinutes = Math.round(
+      processedData.yearlyTotalDurationSeconds / 60
+    );
+  }
+
+  // Handler for bar press
+  const handleBarPress = (item: ChartBar) => {
+    if (item.workoutCount === 0) return;
+    setSelectedDayData(item);
+    setIsDetailModalVisible(true);
+  };
+
+  const customDataPoint = () => {
+    return (
+      <View
+        style={{
+          width: 14,
+          height: 14,
+          backgroundColor: colors.chartPoint,
+          borderWidth: 3,
+          borderRadius: 7,
+          borderColor: colors.chartPointBorder,
+        }}
+      />
+    );
+  };
+
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView
@@ -312,7 +573,8 @@ export default function TestScreen() {
         </View>
 
         <View style={styles.tabContainer}>
-          {["Weekly", "Monthly", "All Time"].map((tab) => (
+          {/* --- MODIFIED: Renamed "All Time" to "Yearly" --- */}
+          {["Weekly", "Monthly", "Yearly"].map((tab) => (
             <TouchableOpacity
               key={tab}
               style={[styles.tab, activeTab === tab && styles.activeTab]}
@@ -333,32 +595,43 @@ export default function TestScreen() {
         <View style={styles.statRow}>
           <StatCard
             icon="zap"
-            value={processedData.totalWorkouts}
+            value={displayTotalWorkouts}
             label="Total Workouts"
           />
           <StatCard
             icon="clock"
-            value={`${processedData.totalDurationMinutes}m`}
+            value={`${displayTotalDurationMinutes}m`}
             label="Total Duration"
           />
         </View>
 
-        <ChartCard title="Weekly Frequency">
+        {/* --- MODIFIED: BarChart --- */}
+        <ChartCard title={`${chartTitle} Duration (${yAxisProps.yAxisTitle})`}>
           <BarChart
-            data={processedData.weeklyData}
-            barWidth={30}
+            data={finalChartData}
+            barWidth={barWidth}
+            spacing={spacing}
             barBorderRadius={6}
             frontColor={colors.primary}
-            yAxisTextStyle={{ color: colors.subtleText }}
+            yAxisTextStyle={styles.yAxisLabelStyle}
             xAxisLabelTextStyle={{ color: colors.subtleText, fontSize: 12 }}
-            noOfSections={4}
+            noOfSections={yAxisProps.noOfSections}
+            stepValue={yAxisProps.stepValue}
+            maxValue={yAxisProps.maxValue}
             yAxisThickness={0}
             xAxisThickness={0}
-            hideRules
+            rulesColor={colors.border}
+            rulesType="solid"
+            onPress={handleBarPress}
+            yAxisLabelSuffix={` ${yAxisProps.yAxisSuffix}`}
+            formatYLabel={yAxisProps.formatYLabel}
+            paddingRight={40} // <-- FIX APPLIED
           />
         </ChartCard>
 
-        {processedData.progressionData.length > 1 && (
+        {/* --- MODIFIED: LineChart --- */}
+        {/* Now shown on "Yearly" tab */}
+        {activeTab === "Yearly" && processedData.progressionData.length > 1 && (
           <ChartCard
             title={`Progression: ${processedData.mostFrequentExercise}`}
           >
@@ -369,7 +642,8 @@ export default function TestScreen() {
               startOpacity={0.7}
               endOpacity={0.1}
               spacing={50}
-              yAxisTextStyle={{ color: colors.subtleText }}
+              yAxisTextStyle={styles.yAxisLabelStyle}
+              yAxisLabelSuffix=" lbs"
               xAxisLabelTextStyle={{
                 color: colors.subtleText,
                 fontSize: 10,
@@ -379,10 +653,21 @@ export default function TestScreen() {
               yAxisThickness={0}
               xAxisThickness={0}
               customDataPoint={customDataPoint}
+              rulesColor={colors.border}
+              rulesType="solid"
+              paddingRight={40} // <-- FIX APPLIED
             />
           </ChartCard>
         )}
       </ScrollView>
+
+      <WorkoutDayDetailModal
+        visible={isDetailModalVisible}
+        onClose={() => setIsDetailModalVisible(false)}
+        data={selectedDayData}
+        styles={styles}
+        colors={colors}
+      />
     </SafeAreaView>
   );
 }
@@ -424,6 +709,80 @@ const StatCard = ({
   );
 };
 
+// --- MODIFIED: Modal Component ---
+const WorkoutDayDetailModal = ({
+  visible,
+  onClose,
+  data,
+  styles,
+  colors,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  data: ChartBar | null;
+  styles: ReturnType<typeof getStyles>;
+  colors: (typeof Colors)["light" | "dark"];
+}) => {
+  if (!data) return null;
+
+  // --- MODIFIED: Modal title is now dynamic ---
+  let dateString = data.fullDate.toLocaleDateString("en-US", {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+  });
+
+  // If the label is a month name (e.g., "Jan"), format as "Month Year"
+  if (data.label.length === 3 && isNaN(Number(data.label))) {
+    dateString = data.fullDate.toLocaleDateString("en-US", {
+      month: "long",
+      year: "numeric",
+    });
+  }
+
+  return (
+    <Modal
+      animationType="fade"
+      transparent={true}
+      visible={visible}
+      onRequestClose={onClose}
+    >
+      <Pressable style={styles.modalOverlay} onPress={onClose}>
+        <Pressable
+          style={styles.modalContainer}
+          onPress={(e) => e.stopPropagation()}
+        >
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>{dateString}</Text>
+            <TouchableOpacity onPress={onClose}>
+              <Feather name="x-circle" size={26} color={colors.subtleText} />
+            </TouchableOpacity>
+          </View>
+          <ScrollView contentContainerStyle={styles.modalContent}>
+            <Text style={styles.modalSectionTitle}>
+              Total Duration: {formatDuration(data.totalDuration)}
+            </Text>
+            <View style={styles.divider} />
+            <Text style={styles.modalSectionTitle}>
+              Workouts ({data.workoutCount})
+            </Text>
+            {data.workouts.map((workout, index) => (
+              <View key={index} style={styles.workoutRow}>
+                <Text style={styles.workoutName} numberOfLines={1}>
+                  {workout.name}
+                </Text>
+                <Text style={styles.workoutDuration}>
+                  {formatDuration(workout.duration)}
+                </Text>
+              </View>
+            ))}
+          </ScrollView>
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
+};
+
 // --- STYLES ---
 const getStyles = (scheme: "light" | "dark") => {
   const colors = Colors[scheme];
@@ -433,7 +792,9 @@ const getStyles = (scheme: "light" | "dark") => {
       backgroundColor: colors.background,
     },
     scrollContainer: {
-      padding: 20,
+      paddingHorizontal: 20,
+      paddingTop: 10,
+      paddingBottom: 40,
     },
     center: {
       flex: 1,
@@ -500,10 +861,13 @@ const getStyles = (scheme: "light" | "dark") => {
       color: colors.text,
       marginBottom: 20,
     },
+    // --- MODIFIED: chartContainer Style ---
     chartContainer: {
-      height: 200,
-      paddingRight: 20, // To prevent labels from being cut off
+      height: 220,
+      // paddingRight: 20, // <-- REMOVED
+      paddingBottom: 20,
     },
+    // --- END MODIFICATION ---
     statRow: {
       flexDirection: "row",
       justifyContent: "space-between",
@@ -533,6 +897,76 @@ const getStyles = (scheme: "light" | "dark") => {
       color: colors.subtleText,
       marginTop: 8,
       textAlign: "center",
+    },
+    yAxisLabelStyle: {
+      color: colors.subtleText,
+      fontSize: 12,
+    },
+    modalOverlay: {
+      flex: 1,
+      backgroundColor: "rgba(0, 0, 0, 0.5)",
+      justifyContent: "center",
+      alignItems: "center",
+    },
+    modalContainer: {
+      backgroundColor: colors.card,
+      borderRadius: 24,
+      width: "90%",
+      maxHeight: "60%",
+      padding: 20,
+      shadowColor: "#000",
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.25,
+      shadowRadius: 4,
+      elevation: 5,
+    },
+    modalHeader: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
+      borderBottomWidth: 1,
+      borderBottomColor: colors.border,
+      paddingBottom: 15,
+      marginBottom: 15,
+    },
+    modalTitle: {
+      fontSize: 20,
+      fontWeight: "bold",
+      color: colors.text,
+      flex: 1,
+    },
+    modalContent: {
+      paddingBottom: 20,
+    },
+    modalSectionTitle: {
+      fontSize: 16,
+      fontWeight: "600",
+      color: colors.subtleText,
+      marginBottom: 10,
+    },
+    divider: {
+      height: 1,
+      backgroundColor: colors.border,
+      marginVertical: 15,
+    },
+    workoutRow: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
+      paddingVertical: 12,
+      borderBottomWidth: 1,
+      borderBottomColor: colors.border,
+    },
+    workoutName: {
+      fontSize: 16,
+      color: colors.text,
+      flex: 1,
+      marginRight: 10,
+    },
+    workoutDuration: {
+      fontSize: 16,
+      color: colors.subtleText,
+      fontWeight: "500",
     },
   });
 };

@@ -13,6 +13,7 @@
  * - Manages the overall state, switching between the start view and the active workout view.
  * - Fetches workout plans and workout history from Firebase.
  * - Handles pull-to-refresh functionality.
+ * - **NEW**: Uses `useEffect` and `useLocalSearchParams` to check for a `previewPlanId` param and open the preview modal on load.
  *
  * 2.  StartWorkoutView:
  * - The initial screen users see.
@@ -31,6 +32,7 @@
  *
  * 5.  WorkoutPlanPreviewModal:
  * - Shows a summary of a selected workout plan's exercises before starting.
+ * - Can now be triggered automatically by a route param.
  *
  * 6.  ExerciseLibraryModal (Unified Component):
  * - A single, reusable modal for browsing and selecting exercises from the library.
@@ -59,7 +61,7 @@
 
 import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router"; // <-- Import useLocalSearchParams
 import {
   Timestamp,
   addDoc,
@@ -132,10 +134,10 @@ const Colors = {
 };
 // --- END OF IMPORTS ---
 
-// --- TYPE DEFINITIONS ---
-interface Workout {
+// --- TYPE DEFINITIONS (from WorkoutContext) ---
+interface ActiveWorkout {
   name: string;
-  sets: number;
+  sets: number; // This is a number
   reps: string;
   primaryMuscles?: string[];
 }
@@ -145,11 +147,12 @@ interface WorkoutPlan {
   planName: string;
   description?: string;
   selectedDays: string[];
-  workouts: Workout[];
+  workouts: ActiveWorkout[]; // Uses ActiveWorkout type
   primaryMuscleGroups?: string[];
   order: number;
   icon?: string;
 }
+// --- End Type Definitions ---
 
 interface WorkoutHistory {
   id: string;
@@ -1521,6 +1524,7 @@ export default function WorkoutSessionScreen() {
   const styles = getStyles(useColorScheme() ?? "light");
   const colors = Colors[useColorScheme() ?? "light"];
   const router = useRouter();
+  const params = useLocalSearchParams(); // <-- Get route params
 
   const { startWorkout, stopWorkout, activeWorkout } = useWorkout();
 
@@ -1571,8 +1575,20 @@ export default function WorkoutSessionScreen() {
     );
     try {
       const querySnapshot = await getDocs(plansCollectionRef);
+      // Ensure data is parsed into the correct WorkoutPlan type
       const plans = querySnapshot.docs
-        .map((doc) => ({ id: doc.id, ...doc.data() } as WorkoutPlan))
+        .map((doc) => {
+          const data = doc.data();
+          return {
+            id: doc.id,
+            ...data,
+            // Transform workouts to ensure 'sets' is a number
+            workouts: (data.workouts || []).map((w: any) => ({
+              ...w,
+              sets: parseInt(String(w.sets), 10) || 0,
+            })),
+          } as WorkoutPlan;
+        })
         .sort((a, b) => a.order - b.order);
       setAllPlans(plans);
     } catch (error) {
@@ -1667,6 +1683,30 @@ export default function WorkoutSessionScreen() {
     }
   }, [user, fetchWorkoutPlans, fetchRecentWorkouts]);
 
+  // --- NEW useEffect to handle incoming preview param ---
+  useEffect(() => {
+    // Only run if not loading, we have plans, and the param exists
+    if (!isLoading && params.previewPlanId && allPlans.length > 0) {
+      const planId = params.previewPlanId as string;
+      const planToPreview = allPlans.find((p) => p.id === planId);
+
+      if (planToPreview) {
+        setPreviewPlan(planToPreview);
+        setIsPreviewModalVisible(true);
+        // Clear the param so it doesn't trigger again on re-render
+        router.setParams({ previewPlanId: "" });
+      } else {
+        // Handle case where ID is invalid
+        Alert.alert(
+          "Plan Not Found",
+          "The workout plan from your agenda could not be found. It may have been deleted."
+        );
+        router.setParams({ previewPlanId: "" });
+      }
+    }
+  }, [isLoading, allPlans, params.previewPlanId, router]);
+  // --- END OF NEW useEffect ---
+
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     await Promise.all([fetchWorkoutPlans(), fetchRecentWorkouts()]);
@@ -1689,13 +1729,13 @@ export default function WorkoutSessionScreen() {
   const handlePreviewFromHistory = (historyItem: WorkoutHistory) => {
     if (historyItem.planId.startsWith("quick-start")) {
       // Dynamically create a plan from history to preview/restart
-      const workoutsFromHistory: Workout[] = (historyItem.exercises || []).map(
-        (ex) => ({
-          name: ex.name,
-          sets: ex.sets.length,
-          reps: ex.sets[0]?.reps || "8-12", // Best guess for reps target
-        })
-      );
+      const workoutsFromHistory: ActiveWorkout[] = (
+        historyItem.exercises || []
+      ).map((ex) => ({
+        name: ex.name,
+        sets: ex.sets.length,
+        reps: ex.sets[0]?.reps || "8-12", // Best guess for reps target
+      }));
 
       const tempPlan: WorkoutPlan = {
         id: historyItem.id, // Use history doc ID for uniqueness
@@ -1898,7 +1938,8 @@ export default function WorkoutSessionScreen() {
   ) => {
     if (!user) return;
 
-    const updatedWorkouts: Workout[] = updatedData.map((ex) => ({
+    // This now correctly uses the number 'sets'
+    const updatedWorkouts = updatedData.map((ex) => ({
       name: ex.name,
       reps: ex.targetReps,
       sets: ex.sets.length,
